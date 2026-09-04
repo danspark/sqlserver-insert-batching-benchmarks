@@ -1,0 +1,2 @@
+scenario,commit,timestamp,mode,strategy,batcher,workers,writers,batch,delay_ms,capacity,prefetch,distribution,rows,duration_s,committed_rows_s,ack_s,p50_commit_ms,p95_commit_ms,p99_commit_ms,p50_ack_ms,p95_ack_ms,p99_ack_ms,errors,correct
+"control-noop-queue","2f0f925288231cbd8d721a085d637ebdc35d096b","2026-09-04T20:15:44.5411650+00:00",NoOpQueue,BulkCopy,Channel,4,4,1000,1,16000,4000,Uniform,250000,6.064488,0.000,41223.598,0.005,0.024,0.282,0.011,0.046,0.303,0,True

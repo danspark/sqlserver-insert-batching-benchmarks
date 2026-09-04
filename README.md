@@ -106,12 +106,12 @@ Stages run in search order; scenario order is rotated deterministically inside e
 
 ## Measured results
 
-Generated from 105 raw scenario files. 105 passed every correctness check.
-Measured binaries: `c6d3469` (15 runs), `e0d9785` (90 runs).
+Generated from 109 raw scenario files. 109 passed every correctness check.
+Measured binaries: `2f0f925` (4 runs), `c6d3469` (15 runs), `e0d9785` (90 runs).
 
-The no-op queue ceiling was **34,825 messages/s** with p99 delivery-to-acknowledgment latency of 6.22 ms.
+The no-op queue ceiling was **41,224 messages/s** with p99 delivery-to-acknowledgment latency of 0.30 ms.
 
-RabbitMQ did not set the observed ceiling: the no-op path was 1.20x faster than the fastest SQL-backed run (confirmed-table-valued-parameter).
+RabbitMQ did not set the observed ceiling: the no-op path was 1.42x faster than the fastest SQL-backed run (confirmed-table-valued-parameter).
 
 ![Queue throughput](docs/charts/queue-throughput.svg)
 
@@ -129,25 +129,33 @@ RabbitMQ did not set the observed ceiling: the no-op path was 1.20x faster than 
 
 ### Long-run finalist confirmation
 
-| Strategy | Repetitions | Rows/run | Configuration | Median rows/s | Range | Median p99 ack | Median duration |
-|---|---:|---:|---|---:|---:|---:|---:|
-| Individual insert per message | 3 | 750,000 | 2 workers x 4 writers, batch 1 | 1,934 | 1,842–2,053 | 165.98 ms | 387.76 s |
-| Table-valued parameter | 3 | 750,000 | 1 worker x 2 writers, batch 5,000 | 23,957 | 20,739–29,082 | 417.83 ms | 31.31 s |
-| Multiple INSERT statements | 3 | 750,000 | 4 workers x 2 writers, batch 50 | 13,928 | 8,474–15,132 | 265.98 ms | 53.85 s |
-| Multi-row VALUES | 3 | 750,000 | 2 workers x 2 writers, batch 100 | 8,809 | 8,749–8,964 | 1,246.02 ms | 85.14 s |
-| SqlBulkCopy | 3 | 750,000 | 1 worker x 2 writers, batch 1,000 | 20,543 | 20,081–21,789 | 339.33 ms | 36.51 s |
+Results from different binaries are kept separate so a code change cannot silently alter a finalist's aggregate.
+
+| Strategy | Binary | Repetitions | Rows/run | Configuration | Median rows/s | Range | Median p99 ack | Median duration |
+|---|---|---:|---:|---|---:|---:|---:|---:|
+| Individual insert per message | `c6d3469` | 3 | 750,000 | 2 workers x 4 writers, batch 1 | 1,934 | 1,842–2,053 | 165.98 ms | 387.76 s |
+| Table-valued parameter | `c6d3469` | 3 | 750,000 | 1 worker x 2 writers, batch 5,000 | 23,957 | 20,739–29,082 | 417.83 ms | 31.31 s |
+| Table-valued parameter | `2f0f925` | 3 | 750,000 | 1 worker x 2 writers, batch 5,000 | 22,808 | 17,609–27,790 | 2,226.77 ms | 32.88 s |
+| Multiple INSERT statements | `c6d3469` | 3 | 750,000 | 4 workers x 2 writers, batch 50 | 13,928 | 8,474–15,132 | 265.98 ms | 53.85 s |
+| Multi-row VALUES | `c6d3469` | 3 | 750,000 | 2 workers x 2 writers, batch 100 | 8,809 | 8,749–8,964 | 1,246.02 ms | 85.14 s |
+| SqlBulkCopy | `c6d3469` | 3 | 750,000 | 1 worker x 2 writers, batch 1,000 | 20,543 | 20,081–21,789 | 339.33 ms | 36.51 s |
+
+#### Cross-binary optimization check
+
+For the same Table-valued parameter configuration and 750,000-row workload, `2f0f925` used 2,437 worker-allocated bytes/row versus 2,895 at `c6d3469` (-15.8%). Median Gen0/Gen1/Gen2 collections changed from 172/151/43 to 133/107/17. Median throughput changed from 23,957 to 22,808 committed rows/s (-4.8%). All repetitions passed correctness; the throughput spread shows why allocation and rate are reported independently.
 
 ### Confirmation resource use
 
 Each row is the repetition nearest that finalist's median throughput. Worker peak RSS is the sum of per-process peaks; the SQL values are DMV deltas over the run. Full before/after metrics, waits, GC counts, and one-second container samples remain in the raw artifacts.
 
-| Strategy | App CPU | Worker peak RSS | Allocated | SQL CPU | SQL writes | SQL write stall | WRITELOG wait | Rabbit memory |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Individual insert per message | 914.0 s | 377 MiB | 19.13 GiB | 908.5 s | 2,806 MiB | 198,650 ms | 838,325 ms | 255 MiB |
-| Table-valued parameter | 104.6 s | 202 MiB | 2.02 GiB | 20.9 s | 647 MiB | 6,961 ms | 424 ms | 240 MiB |
-| Multiple INSERT statements | 143.9 s | 590 MiB | 8.82 GiB | 128.8 s | 832 MiB | 7,762 ms | 30,161 ms | 246 MiB |
-| Multi-row VALUES | 121.3 s | 330 MiB | 7.27 GiB | 123.7 s | 967 MiB | 34,434 ms | 9,074 ms | 240 MiB |
-| SqlBulkCopy | 167.8 s | 199 MiB | 2.07 GiB | 32.4 s | 887 MiB | 3,856 ms | 546 ms | 235 MiB |
+| Strategy | Binary | App CPU | Worker peak RSS | Allocated/row | GC0 | GC1 | GC2 | SQL CPU | SQL writes | SQL write stall | WRITELOG wait | Rabbit memory |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Individual insert per message | `c6d3469` | 914.0 s | 377 MiB | 27,394 B | 1,413 | 256 | 85 | 908.5 s | 2,806 MiB | 198,650 ms | 838,325 ms | 255 MiB |
+| Table-valued parameter | `c6d3469` | 104.6 s | 202 MiB | 2,895 B | 172 | 151 | 43 | 20.9 s | 647 MiB | 6,961 ms | 424 ms | 240 MiB |
+| Table-valued parameter | `2f0f925` | 95.3 s | 240 MiB | 2,437 B | 133 | 107 | 17 | 20.6 s | 574 MiB | 5,029 ms | 282 ms | 261 MiB |
+| Multiple INSERT statements | `c6d3469` | 143.9 s | 590 MiB | 12,632 B | 709 | 516 | 195 | 128.8 s | 832 MiB | 7,762 ms | 30,161 ms | 246 MiB |
+| Multi-row VALUES | `c6d3469` | 121.3 s | 330 MiB | 10,409 B | 602 | 594 | 121 | 123.7 s | 967 MiB | 34,434 ms | 9,074 ms | 240 MiB |
+| SqlBulkCopy | `c6d3469` | 167.8 s | 199 MiB | 2,969 B | 186 | 175 | 50 | 32.4 s | 887 MiB | 3,856 ms | 546 ms | 235 MiB |
 
 ### Direct-to-database controls
 
@@ -188,9 +196,7 @@ These direct controls are single 10,000-row runs, so the ratios estimate pipelin
 | Table-valued parameter | refine-tablevaluedparameter-batch-10 | 1,128 | 126.54 ms | 10 | 2 | 1 |
 | Table-valued parameter | refine-tablevaluedparameter-batch-100 | 4,065 | 265.83 ms | 100 | 2 | 1 |
 | Table-valued parameter | scaling-tablevaluedparameter-workers-1 | 11,910 | 275.14 ms | 500 | 2 | 1 |
-| Table-valued parameter | broad-tablevaluedparameter-hotparent | 12,181 | 349.56 ms | 500 | 2 | 1 |
-| Table-valued parameter | refine-tablevaluedparameter-batch-5000 | 19,911 | 387.38 ms | 5,000 | 2 | 1 |
-| Table-valued parameter | confirmed-table-valued-parameter | 23,957 | 396.10 ms | 5,000 | 2 | 1 |
+| Table-valued parameter | confirmed-table-valued-parameter | 27,790 | 290.85 ms | 5,000 | 2 | 1 |
 | Table-valued parameter | confirmed-table-valued-parameter | 29,082 | 417.83 ms | 5,000 | 2 | 1 |
 | Individual insert per message | broad-individual-uniform | 1,784 | 14.08 ms | 1 | 4 | 1 |
 | Individual insert per message | scaling-individual-workers-2 | 3,004 | 20.90 ms | 1 | 4 | 2 |
@@ -242,7 +248,11 @@ Every published run passed row-count, distinct-ID, missing-ID, foreign-key, queu
 - [confirmed-table-valued-parameter, repetition 1](results/published/20260904-confirmation-c6d3469/confirmed-table-valued-parameter-r1.json)
 - [confirmed-table-valued-parameter, repetition 3](results/published/20260904-confirmation-c6d3469/confirmed-table-valued-parameter-r3.json)
 - [confirmed-table-valued-parameter, repetition 2](results/published/20260904-confirmation-c6d3469/confirmed-table-valued-parameter-r2.json)
+- [confirmed-table-valued-parameter, repetition 1](results/published/20260904-optimization-tvp-2f0f925/confirmed-table-valued-parameter-r1.json)
+- [confirmed-table-valued-parameter, repetition 2](results/published/20260904-optimization-tvp-2f0f925/confirmed-table-valued-parameter-r2.json)
+- [confirmed-table-valued-parameter, repetition 3](results/published/20260904-optimization-tvp-2f0f925/confirmed-table-valued-parameter-r3.json)
 - [control-noop-queue, repetition 1](results/published/20260904-full-e0d9785/control-noop-queue-r1.json)
+- [control-noop-queue, repetition 1](results/published/20260904-optimization-noop-2f0f925/control-noop-queue-r1.json)
 - [direct-bulkcopy, repetition 1](results/published/20260904-full-e0d9785/direct-bulkcopy-r1.json)
 - [direct-individual, repetition 1](results/published/20260904-full-e0d9785/direct-individual-r1.json)
 - [direct-multipleinsertstatements, repetition 1](results/published/20260904-full-e0d9785/direct-multipleinsertstatements-r1.json)
@@ -387,7 +397,7 @@ CI builds with nullable references and recommended analyzers enabled, runs unit 
 
 ## Runtime telemetry
 
-When `OTEL_EXPORTER_OTLP_ENDPOINT` is present, every measured worker exports as service `sqlbench-worker` with a stable `worker-N` instance ID. The Aspire Metrics page then exposes the built-in `System.Runtime` instruments for total allocated bytes, GC collections and pause time, heap size and fragmentation, process CPU and working set, JIT activity, locks, and the thread pool.
+When `OTEL_EXPORTER_OTLP_ENDPOINT` is present, every measured worker exports as service `sqlbench-worker` with a stable `worker-N` instance ID. The Aspire Metrics page then exposes the [built-in `System.Runtime` instruments](https://learn.microsoft.com/dotnet/core/diagnostics/built-in-metrics-runtime) for total allocated bytes, GC collections and pause time, heap size and fragmentation, process CPU and working set, JIT activity, locks, and the thread pool.
 
 The `SqlBench.Batching` meter publishes queue depth, backpressure, batch size, channel wait, fill time, handler time, and item outcomes. The `SqlBench.Worker` meter publishes deliveries, commits, acknowledgments, redeliveries, in-flight work, delivery-to-commit and delivery-to-acknowledgment latency, SQL execution time, transaction time, and failures. Instruments are process-wide and tag-free on the hot path; the worker process supplies instance identity as an OpenTelemetry resource attribute.
 
@@ -397,6 +407,7 @@ Raw result files remain the authority for benchmark percentiles and process coun
 
 - Results describe one local containerized machine and are sensitive to storage, CPU scheduling, thermal state, Docker virtualization, SQL Server cache state, and other activity.
 - Application metrics include process CPU, peak working set, allocations, garbage collections, batch behavior, SQL timing, and latency. SQL Server DMV snapshots and RabbitMQ management snapshots are before/after values, so they are less precise than dedicated host telemetry.
+- [`SqlBatch`](https://learn.microsoft.com/dotnet/api/microsoft.data.sqlclient.sqlbatch) was prototyped as a possible sixth strategy. Its collection of per-row `SqlBatchCommand` objects is not the required single command containing multiple `INSERT` statements, and the exploratory run traded a modest throughput increase for higher allocation and substantially more Gen1 collections. It was therefore not substituted into the five-strategy comparison; a future addition should give it a separate configuration search and published repetitions.
 - `SqlBulkCopy` streams each logical batch through an `IDataReader`; the process batcher still owns the batch's message objects until commit.
 - Direct database controls use the same adapters and transactions but do not reproduce every scheduling cost in the worker process.
 - Published per-run JSON retains percentile and distribution summaries rather than every per-message latency sample, keeping the repository practical to clone. Live worker samples are reduced only after those summaries are calculated.

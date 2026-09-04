@@ -1,0 +1,10 @@
+{
+  "profile": "Confirmation",
+  "gitCommit": "2f0f925288231cbd8d721a085d637ebdc35d096b",
+  "generatedAt": "2026-09-04T20:20:14.8074245+00:00",
+  "files": [
+    "confirmed-table-valued-parameter-r1.json",
+    "confirmed-table-valued-parameter-r2.json",
+    "confirmed-table-valued-parameter-r3.json"
+  ]
+}

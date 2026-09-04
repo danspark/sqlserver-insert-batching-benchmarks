@@ -168,40 +168,45 @@ internal static class ReportApplication
                 $"{speedup:N2}x | yes |");
         }
 
-        IGrouping<InsertStrategyKind, ScenarioResult>[] confirmations = valid
+        IGrouping<(InsertStrategyKind Strategy, string Commit), ScenarioResult>[] confirmations = valid
             .Where(static result => result.Configuration.Stage == "confirmation")
-            .GroupBy(static result => result.Configuration.Strategy)
-            .OrderBy(static group => group.Key)
+            .GroupBy(static result => (result.Configuration.Strategy, result.GitCommit))
+            .OrderBy(static group => group.Key.Strategy)
+            .ThenBy(static group => group.Min(static result => result.Timestamp))
             .ToArray();
         if (confirmations.Length > 0)
         {
             text.AppendLine();
             text.AppendLine("### Long-run finalist confirmation");
             text.AppendLine();
-            text.AppendLine("| Strategy | Repetitions | Rows/run | Configuration | Median rows/s | Range | Median p99 ack | Median duration |");
-            text.AppendLine("|---|---:|---:|---|---:|---:|---:|---:|");
-            foreach (IGrouping<InsertStrategyKind, ScenarioResult> group in confirmations)
+            text.AppendLine("Results from different binaries are kept separate so a code change cannot silently alter a finalist's aggregate.");
+            text.AppendLine();
+            text.AppendLine("| Strategy | Binary | Repetitions | Rows/run | Configuration | Median rows/s | Range | Median p99 ack | Median duration |");
+            text.AppendLine("|---|---|---:|---:|---|---:|---:|---:|---:|");
+            foreach (IGrouping<(InsertStrategyKind Strategy, string Commit), ScenarioResult> group in confirmations)
             {
                 Scenario config = group.First().Configuration;
                 double[] rates = group.Select(static result => result.CommittedRowsPerSecond).Order().ToArray();
                 double[] latencies = group.Select(static result => result.DeliveryToAcknowledgmentMilliseconds.P99).Order().ToArray();
                 double[] durations = group.Select(static result => result.DurationSeconds).Order().ToArray();
                 text.AppendLine(
-                    $"| {StrategyName(group.Key)} | {group.Count()} | {config.RowCount:N0} | " +
+                    $"| {StrategyName(group.Key.Strategy)} | `{ShortCommit(group.Key.Commit)}` | {group.Count()} | {config.RowCount:N0} | " +
                     $"{config.WorkerInstances} worker{(config.WorkerInstances == 1 ? string.Empty : "s")} x " +
                     $"{config.WritersPerInstance} writer{(config.WritersPerInstance == 1 ? string.Empty : "s")}, batch {config.BatchSize:N0} | " +
                     $"{Median(rates):N0} | {rates[0]:N0}–{rates[^1]:N0} | {Median(latencies):N2} ms | " +
                     $"{Median(durations):N2} s |");
             }
 
+            AppendCrossBinaryComparison(text, confirmations);
+
             text.AppendLine();
             text.AppendLine("### Confirmation resource use");
             text.AppendLine();
             text.AppendLine("Each row is the repetition nearest that finalist's median throughput. Worker peak RSS is the sum of per-process peaks; the SQL values are DMV deltas over the run. Full before/after metrics, waits, GC counts, and one-second container samples remain in the raw artifacts.");
             text.AppendLine();
-            text.AppendLine("| Strategy | App CPU | Worker peak RSS | Allocated | SQL CPU | SQL writes | SQL write stall | WRITELOG wait | Rabbit memory |");
-            text.AppendLine("|---|---:|---:|---:|---:|---:|---:|---:|---:|");
-            foreach (IGrouping<InsertStrategyKind, ScenarioResult> group in confirmations)
+            text.AppendLine("| Strategy | Binary | App CPU | Worker peak RSS | Allocated/row | GC0 | GC1 | GC2 | SQL CPU | SQL writes | SQL write stall | WRITELOG wait | Rabbit memory |");
+            text.AppendLine("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+            foreach (IGrouping<(InsertStrategyKind Strategy, string Commit), ScenarioResult> group in confirmations)
             {
                 double[] rates = group.Select(static result => result.CommittedRowsPerSecond).Order().ToArray();
                 double medianRate = Median(rates);
@@ -210,6 +215,9 @@ internal static class ReportApplication
                 double appCpuSeconds = representative.Workers.Sum(static worker => worker.Process.CpuSeconds);
                 long peakWorkingSetBytes = representative.Workers.Sum(static worker => worker.Process.PeakWorkingSetBytes);
                 long allocatedBytes = representative.Workers.Sum(static worker => worker.Process.AllocatedBytes);
+                int generation0Collections = representative.Workers.Sum(static worker => worker.Process.Generation0Collections);
+                int generation1Collections = representative.Workers.Sum(static worker => worker.Process.Generation1Collections);
+                int generation2Collections = representative.Workers.Sum(static worker => worker.Process.Generation2Collections);
                 long sqlCpuMilliseconds = Math.Max(0,
                     representative.SqlServerAfter.ProcessKernelTimeMilliseconds
                     + representative.SqlServerAfter.ProcessUserTimeMilliseconds
@@ -222,8 +230,10 @@ internal static class ReportApplication
                     - representative.SqlServerBefore.WriteStallMilliseconds);
                 long writeLogWait = WaitDelta(representative, "WRITELOG");
                 text.AppendLine(
-                    $"| {StrategyName(group.Key)} | {appCpuSeconds:N1} s | {ToMebibytes(peakWorkingSetBytes):N0} MiB | " +
-                    $"{ToGibibytes(allocatedBytes):N2} GiB | {sqlCpuMilliseconds / 1_000.0:N1} s | " +
+                    $"| {StrategyName(group.Key.Strategy)} | `{ShortCommit(group.Key.Commit)}` | {appCpuSeconds:N1} s | " +
+                    $"{ToMebibytes(peakWorkingSetBytes):N0} MiB | {allocatedBytes / (double)representative.Configuration.RowCount:N0} B | " +
+                    $"{generation0Collections:N0} | {generation1Collections:N0} | {generation2Collections:N0} | " +
+                    $"{sqlCpuMilliseconds / 1_000.0:N1} s | " +
                     $"{ToMebibytes(sqlWrites):N0} MiB | {sqlWriteStall:N0} ms | {writeLogWait:N0} ms | " +
                     $"{ToMebibytes(representative.RabbitMqAfter.MemoryBytes):N0} MiB |");
             }
@@ -337,6 +347,96 @@ internal static class ReportApplication
         ? (sorted[(sorted.Length / 2) - 1] + sorted[sorted.Length / 2]) / 2
         : sorted[sorted.Length / 2];
 
+    private static void AppendCrossBinaryComparison(
+        StringBuilder text,
+        IEnumerable<IGrouping<(InsertStrategyKind Strategy, string Commit), ScenarioResult>> confirmations)
+    {
+        foreach (IGrouping<InsertStrategyKind, IGrouping<(InsertStrategyKind Strategy, string Commit), ScenarioResult>> strategyGroup
+            in confirmations.GroupBy(static group => group.Key.Strategy))
+        {
+            IGrouping<(InsertStrategyKind Strategy, string Commit), ScenarioResult>[] versions = strategyGroup
+                .OrderBy(static group => group.Min(static result => result.Timestamp))
+                .ToArray();
+            if (versions.Length < 2)
+            {
+                continue;
+            }
+
+            IGrouping<(InsertStrategyKind Strategy, string Commit), ScenarioResult> baseline = versions[^2];
+            IGrouping<(InsertStrategyKind Strategy, string Commit), ScenarioResult> current = versions[^1];
+            if (!EquivalentConfiguration(baseline.First().Configuration, current.First().Configuration))
+            {
+                continue;
+            }
+
+            double baselineAllocation = Median(baseline
+                .Select(static result => AllocatedBytesPerRow(result))
+                .Order()
+                .ToArray());
+            double currentAllocation = Median(current
+                .Select(static result => AllocatedBytesPerRow(result))
+                .Order()
+                .ToArray());
+            double baselineThroughput = Median(baseline
+                .Select(static result => result.CommittedRowsPerSecond)
+                .Order()
+                .ToArray());
+            double currentThroughput = Median(current
+                .Select(static result => result.CommittedRowsPerSecond)
+                .Order()
+                .ToArray());
+
+            text.AppendLine();
+            text.AppendLine("#### Cross-binary optimization check");
+            text.AppendLine();
+            text.AppendLine(
+                $"For the same {StrategyName(strategyGroup.Key)} configuration and {current.First().Configuration.RowCount:N0}-row workload, " +
+                $"`{ShortCommit(current.Key.Commit)}` used {currentAllocation:N0} worker-allocated bytes/row versus " +
+                $"{baselineAllocation:N0} at `{ShortCommit(baseline.Key.Commit)}` ({PercentChange(baselineAllocation, currentAllocation)}). " +
+                $"Median Gen0/Gen1/Gen2 collections changed from {MedianCollectionCount(baseline, 0):N0}/" +
+                $"{MedianCollectionCount(baseline, 1):N0}/{MedianCollectionCount(baseline, 2):N0} to " +
+                $"{MedianCollectionCount(current, 0):N0}/{MedianCollectionCount(current, 1):N0}/" +
+                $"{MedianCollectionCount(current, 2):N0}. Median throughput changed from {baselineThroughput:N0} to " +
+                $"{currentThroughput:N0} committed rows/s ({PercentChange(baselineThroughput, currentThroughput)}). " +
+                "All repetitions passed correctness; the throughput spread shows why allocation and rate are reported independently.");
+        }
+    }
+
+    private static double AllocatedBytesPerRow(ScenarioResult result) => result.Configuration.RowCount == 0
+        ? 0
+        : result.Workers.Sum(static worker => worker.Process.AllocatedBytes) / (double)result.Configuration.RowCount;
+
+    private static double MedianCollectionCount(IEnumerable<ScenarioResult> results, int generation) => Median(results
+        .Select(result => generation switch
+        {
+            0 => result.Workers.Sum(static worker => worker.Process.Generation0Collections),
+            1 => result.Workers.Sum(static worker => worker.Process.Generation1Collections),
+            _ => result.Workers.Sum(static worker => worker.Process.Generation2Collections)
+        })
+        .Select(static count => (double)count)
+        .Order()
+        .ToArray());
+
+    private static bool EquivalentConfiguration(Scenario left, Scenario right) =>
+        left.Mode == right.Mode
+        && left.Strategy == right.Strategy
+        && left.Batching == right.Batching
+        && left.Distribution == right.Distribution
+        && left.Seed == right.Seed
+        && left.RowCount == right.RowCount
+        && left.WorkerInstances == right.WorkerInstances
+        && left.WritersPerInstance == right.WritersPerInstance
+        && left.BatchSize == right.BatchSize
+        && left.MaximumBatchingDelayMilliseconds == right.MaximumBatchingDelayMilliseconds
+        && left.ChannelCapacity == right.ChannelCapacity
+        && left.RabbitMqPrefetch == right.RabbitMqPrefetch;
+
+    private static string PercentChange(double baseline, double current) => baseline == 0
+        ? "n/a"
+        : $"{((current / baseline) - 1) * 100:N1}%";
+
+    private static string ShortCommit(string commit) => commit[..Math.Min(7, commit.Length)];
+
     private static long WaitDelta(ScenarioResult result, string waitType)
     {
         long before = result.SqlServerBefore.Waits
@@ -349,8 +449,6 @@ internal static class ReportApplication
     }
 
     private static double ToMebibytes(long bytes) => bytes / 1_048_576.0;
-
-    private static double ToGibibytes(long bytes) => bytes / 1_073_741_824.0;
 
     private static async Task WriteCsvAsync(
         string path,
