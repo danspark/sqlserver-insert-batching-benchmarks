@@ -1,0 +1,62 @@
+name: sqlserver-insert-batching-benchmarks
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2025-CU8-ubuntu-22.04@sha256:2f9da673779dc5556d385164f6b1541d169ff1eeed97b9833ca0308e8628e683
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${SQLBENCH_SA_PASSWORD:?set SQLBENCH_SA_PASSWORD}
+    ports:
+      - "14333:1433"
+    volumes:
+      - sql-data:/var/opt/mssql
+    mem_limit: 4g
+    cpus: 4
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q \"SELECT 1\" -b -o /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 30s
+
+  rabbitmq:
+    image: rabbitmq:4.3.5-management@sha256:ffd1b50c522ad20172ffd6716a2f41db375c7269560c8f3fb9a694e210ef0852
+    environment:
+      RABBITMQ_DEFAULT_USER: ${SQLBENCH_RABBIT_USER:?set SQLBENCH_RABBIT_USER}
+      RABBITMQ_DEFAULT_PASS: ${SQLBENCH_RABBIT_PASSWORD:?set SQLBENCH_RABBIT_PASSWORD}
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    volumes:
+      - rabbit-data:/var/lib/rabbitmq
+    mem_limit: 1g
+    cpus: 2
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+  worker:
+    profiles: [workers]
+    build:
+      context: .
+      dockerfile: src/SqlBench.Worker/Dockerfile
+    command: ["--idle"]
+    environment:
+      SQLBENCH_SQL_CONNECTION: Server=sqlserver,1433;User ID=sa;Password=${SQLBENCH_SA_PASSWORD};Encrypt=True;TrustServerCertificate=True;Pooling=True;Max Pool Size=200
+      SQLBENCH_RABBIT_CONNECTION: amqp://${SQLBENCH_RABBIT_USER}:${SQLBENCH_RABBIT_PASSWORD}@rabbitmq:5672/%2f
+      SQLBENCH_RABBIT_MANAGEMENT: http://rabbitmq:15672
+      SQLBENCH_RABBIT_USER: ${SQLBENCH_RABBIT_USER}
+      SQLBENCH_RABBIT_PASSWORD: ${SQLBENCH_RABBIT_PASSWORD}
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  sql-data:
+  rabbit-data:

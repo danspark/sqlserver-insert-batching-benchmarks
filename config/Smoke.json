@@ -1,0 +1,106 @@
+{
+  "name": "Smoke",
+  "warmupRows": 100,
+  "scenarios": [
+    {
+      "name": "smoke-noop-queue",
+      "mode": "NoOpQueue",
+      "strategy": "BulkCopy",
+      "batching": "Channel",
+      "rowCount": 5000,
+      "workerInstances": 2,
+      "writersPerInstance": 2,
+      "batchSize": 500,
+      "maximumBatchingDelayMilliseconds": 1,
+      "channelCapacity": 4000,
+      "rabbitMqPrefetch": 1000
+    },
+    {
+      "name": "smoke-individual-queue",
+      "strategy": "Individual",
+      "batching": "None",
+      "rowCount": 500,
+      "batchSize": 1,
+      "channelCapacity": 100,
+      "rabbitMqPrefetch": 100
+    },
+    {
+      "name": "smoke-tvp-queue",
+      "strategy": "TableValuedParameter",
+      "rowCount": 2000,
+      "batchSize": 100,
+      "channelCapacity": 2000,
+      "rabbitMqPrefetch": 400
+    },
+    {
+      "name": "smoke-statements-queue",
+      "strategy": "MultipleInsertStatements",
+      "rowCount": 2000,
+      "batchSize": 100,
+      "channelCapacity": 2000,
+      "rabbitMqPrefetch": 400
+    },
+    {
+      "name": "smoke-values-queue",
+      "strategy": "MultiRowValues",
+      "rowCount": 2000,
+      "batchSize": 100,
+      "channelCapacity": 2000,
+      "rabbitMqPrefetch": 400
+    },
+    {
+      "name": "smoke-bulk-queue-channel",
+      "strategy": "BulkCopy",
+      "rowCount": 2000,
+      "batchSize": 500,
+      "channelCapacity": 2000,
+      "rabbitMqPrefetch": 1000
+    },
+    {
+      "name": "smoke-bulk-queue-lock-swap",
+      "strategy": "BulkCopy",
+      "batching": "LockSwap",
+      "rowCount": 2000,
+      "batchSize": 500,
+      "channelCapacity": 2000,
+      "rabbitMqPrefetch": 1000
+    },
+    {
+      "name": "smoke-individual-direct",
+      "mode": "DirectDatabase",
+      "strategy": "Individual",
+      "batching": "None",
+      "rowCount": 500,
+      "batchSize": 1,
+      "channelCapacity": 100
+    },
+    {
+      "name": "smoke-tvp-direct",
+      "mode": "DirectDatabase",
+      "strategy": "TableValuedParameter",
+      "rowCount": 2000,
+      "batchSize": 100
+    },
+    {
+      "name": "smoke-statements-direct",
+      "mode": "DirectDatabase",
+      "strategy": "MultipleInsertStatements",
+      "rowCount": 2000,
+      "batchSize": 100
+    },
+    {
+      "name": "smoke-values-direct",
+      "mode": "DirectDatabase",
+      "strategy": "MultiRowValues",
+      "rowCount": 2000,
+      "batchSize": 100
+    },
+    {
+      "name": "smoke-bulk-direct",
+      "mode": "DirectDatabase",
+      "strategy": "BulkCopy",
+      "rowCount": 2000,
+      "batchSize": 500
+    }
+  ]
+}

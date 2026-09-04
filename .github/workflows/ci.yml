@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-correctness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - name: Build and unit test
+        run: |
+          dotnet build SqlServerInsertBatchingBenchmarks.slnx -c Release
+          dotnet test tests/SqlBench.Batching.Tests/SqlBench.Batching.Tests.csproj -c Release --no-build
+      - name: Start dependencies and run integration tests
+        shell: pwsh
+        run: |
+          $env:SQLBENCH_SA_PASSWORD = "SqlBenchSql_$([Guid]::NewGuid().ToString('N'))Aa1"
+          $env:SQLBENCH_RABBIT_USER = "sqlbench"
+          $env:SQLBENCH_RABBIT_PASSWORD = "SqlBenchRabbit_$([Guid]::NewGuid().ToString('N'))Aa1"
+          $escapedUser = [Uri]::EscapeDataString($env:SQLBENCH_RABBIT_USER)
+          $escapedPassword = [Uri]::EscapeDataString($env:SQLBENCH_RABBIT_PASSWORD)
+          $env:SQLBENCH_SQL_CONNECTION = "Server=localhost,14333;User ID=sa;Password=$($env:SQLBENCH_SA_PASSWORD);Encrypt=True;TrustServerCertificate=True;Pooling=True"
+          $env:SQLBENCH_RABBIT_CONNECTION = "amqp://${escapedUser}:${escapedPassword}@localhost:5673/%2f"
+          $env:SQLBENCH_RABBIT_MANAGEMENT = "http://localhost:15673"
+          docker compose up -d --wait sqlserver rabbitmq
+          try {
+            dotnet test tests/SqlBench.IntegrationTests/SqlBench.IntegrationTests.csproj -c Release --no-build
+          } finally {
+            docker compose down --volumes
+          }

@@ -1,0 +1,14 @@
+**/bin/
+**/obj/
+.vs/
+.idea/
+.vscode/*.user.json
+artifacts/
+results/local/
+**/.work/
+*.user
+*.suo
+*.log
+.env
+.DS_Store
+TestResults/

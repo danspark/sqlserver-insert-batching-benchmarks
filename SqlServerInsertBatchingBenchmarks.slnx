@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SqlBench.Batching/SqlBench.Batching.csproj" />
+    <Project Path="src/SqlBench.Controller/SqlBench.Controller.csproj" />
+    <Project Path="src/SqlBench.Core/SqlBench.Core.csproj" />
+    <Project Path="src/SqlBench.Producer/SqlBench.Producer.csproj" />
+    <Project Path="src/SqlBench.Report/SqlBench.Report.csproj" />
+    <Project Path="src/SqlBench.ServiceDefaults/SqlBench.ServiceDefaults.csproj" />
+    <Project Path="src/SqlBench.Worker/SqlBench.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SqlBench.Batching.Tests/SqlBench.Batching.Tests.csproj" />
+    <Project Path="tests/SqlBench.IntegrationTests/SqlBench.IntegrationTests.csproj" />
+  </Folder>
+</Solution>
