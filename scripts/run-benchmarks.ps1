@@ -105,6 +105,7 @@ try {
     $stamp = [DateTimeOffset]::UtcNow.ToString("yyyyMMdd-HHmmss")
     $OutputDirectory = Join-Path $repoRoot "results/local/$stamp-$($Profile.ToLowerInvariant())"
   }
+  $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
   New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 
   $environment = [ordered]@{
