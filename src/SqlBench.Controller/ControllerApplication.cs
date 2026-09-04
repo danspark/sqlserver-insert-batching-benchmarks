@@ -63,7 +63,7 @@ internal static class ControllerApplication
         var warmed = new HashSet<string>(StringComparer.Ordinal);
         var results = new List<string>();
         int exitCode = 0;
-        foreach (Scenario source in RotateScenarios(scenarios, profile.Name))
+        foreach (Scenario source in RotateScenarios(scenarios))
         {
             source.Validate();
             string implementation = $"{source.Mode}/{source.Strategy}/{source.Batching}";
@@ -462,11 +462,29 @@ internal static class ControllerApplication
         }
     }
 
-    private static IEnumerable<Scenario> RotateScenarios(IReadOnlyList<Scenario> source, string profileName)
+    private static IEnumerable<Scenario> RotateScenarios(IReadOnlyList<Scenario> source)
     {
-        var random = new Random(StringComparer.Ordinal.GetHashCode(profileName));
-        return source.OrderBy(_ => random.Next());
+        return source
+            .GroupBy(static scenario => StageRank(scenario.Stage))
+            .OrderBy(static group => group.Key)
+            .SelectMany(group =>
+            {
+                var random = new Random(unchecked(0x5EED_2026 + group.Key));
+                return group.OrderBy(_ => random.Next());
+            });
     }
+
+    private static int StageRank(string stage) => stage switch
+    {
+        "control" => 0,
+        "broad" => 1,
+        "refine-batch" or "refine-delay" or "refine-capacity" or "refine-prefetch" or
+            "refine-batcher" or "refine-concurrency" => 2,
+        "scaling" => 3,
+        "direct-control" => 4,
+        "finalist" => 5,
+        _ => 6
+    };
 
     private static string RequireOption(string[] args, string name) =>
         ReadOption(args, name) ?? throw new ArgumentException($"Missing required option {name}.");

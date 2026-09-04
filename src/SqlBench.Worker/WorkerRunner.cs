@@ -80,7 +80,7 @@ public static class WorkerRunner
             Uri = new Uri(config.Runtime.RabbitMqConnectionString),
             AutomaticRecoveryEnabled = false,
             TopologyRecoveryEnabled = false,
-            ConsumerDispatchConcurrency = 1,
+            ConsumerDispatchConcurrency = (ushort)config.Scenario.WritersPerInstance,
             ClientProvidedName = $"sql-insert-benchmark-worker-{config.WorkerId}"
         };
 
