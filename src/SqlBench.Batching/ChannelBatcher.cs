@@ -13,7 +13,7 @@ public sealed class ChannelBatcher<T> : IProcessBatcher<T>
     private readonly IBatchHandler<T> _handler;
     private readonly BatcherOptions _options;
     private readonly ILogger _logger;
-    private readonly Channel<WorkItem> _channel;
+    private readonly Channel<PooledWorkItem<T>> _channel;
     private readonly BatcherMetrics _metrics = new();
     private readonly CancellationTokenSource _abort = new();
     private Task[]? _workers;
@@ -29,7 +29,7 @@ public sealed class ChannelBatcher<T> : IProcessBatcher<T>
         _handler = handler;
         _options = options;
         _logger = logger;
-        _channel = Channel.CreateBounded<WorkItem>(new BoundedChannelOptions(options.Capacity)
+        _channel = Channel.CreateBounded<PooledWorkItem<T>>(new BoundedChannelOptions(options.Capacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
             SingleReader = options.HandlerConcurrency == 1,
@@ -60,15 +60,23 @@ public sealed class ChannelBatcher<T> : IProcessBatcher<T>
             throw new InvalidOperationException("The batcher is not accepting work.");
         }
 
-        var work = new WorkItem(item, Stopwatch.GetTimestamp());
+        PooledWorkItem<T> work = PooledWorkItem<T>.Rent(item, Stopwatch.GetTimestamp());
         if (!_channel.Writer.TryWrite(work))
         {
             _metrics.Backpressured();
-            await _channel.Writer.WriteAsync(work, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _channel.Writer.WriteAsync(work, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                work.ReturnUnsubmitted();
+                throw;
+            }
         }
 
         _metrics.Accepted();
-        return new BatchSubmission(work.Completion.Task);
+        return new BatchSubmission(work.Completion);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
@@ -99,12 +107,13 @@ public sealed class ChannelBatcher<T> : IProcessBatcher<T>
         {
             while (await _channel.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                if (!_channel.Reader.TryRead(out WorkItem? first))
+                if (!_channel.Reader.TryRead(out PooledWorkItem<T>? first))
                 {
                     continue;
                 }
 
-                var batch = new List<WorkItem>(_options.MaximumBatchSize) { first };
+                PooledBatch<T> batch = PooledBatch<T>.Rent(_options.MaximumBatchSize);
+                batch.Add(first);
                 _metrics.Dequeued(first.AcceptedTimestamp);
                 long fillStart = Stopwatch.GetTimestamp();
                 await FillBatchAsync(batch, fillStart, cancellationToken).ConfigureAwait(false);
@@ -119,13 +128,13 @@ public sealed class ChannelBatcher<T> : IProcessBatcher<T>
     }
 
     private async Task FillBatchAsync(
-        List<WorkItem> batch,
+        PooledBatch<T> batch,
         long fillStart,
         CancellationToken cancellationToken)
     {
         while (batch.Count < _options.MaximumBatchSize)
         {
-            while (batch.Count < _options.MaximumBatchSize && _channel.Reader.TryRead(out WorkItem? item))
+            while (batch.Count < _options.MaximumBatchSize && _channel.Reader.TryRead(out PooledWorkItem<T>? item))
             {
                 batch.Add(item);
                 _metrics.Dequeued(item.AcceptedTimestamp);
@@ -148,7 +157,7 @@ public sealed class ChannelBatcher<T> : IProcessBatcher<T>
     }
 
     private async Task ProcessBatchAsync(
-        List<WorkItem> batch,
+        PooledBatch<T> batch,
         TimeSpan fillTime,
         CancellationToken cancellationToken)
     {
@@ -156,11 +165,9 @@ public sealed class ChannelBatcher<T> : IProcessBatcher<T>
         BatchHandlerResult result;
         try
         {
-            result = await _handler.HandleAsync(
-                batch.Select(static item => item.Value).ToArray(),
-                cancellationToken).ConfigureAwait(false);
+            result = await _handler.HandleAsync(batch, cancellationToken).ConfigureAwait(false);
 
-            if (result.ItemErrors.Count != batch.Count)
+            if (result.Count != batch.Count)
             {
                 throw new InvalidOperationException("The batch handler returned a result count that did not match the batch.");
             }
@@ -175,26 +182,11 @@ public sealed class ChannelBatcher<T> : IProcessBatcher<T>
 
         for (int index = 0; index < batch.Count; index++)
         {
-            Exception? error = result.ItemErrors[index];
+            Exception? error = result.GetError(index);
             _metrics.Completed(error is null);
-            if (error is null)
-            {
-                batch[index].Completion.TrySetResult();
-            }
-            else
-            {
-                batch[index].Completion.TrySetException(error);
-            }
+            batch.GetWorkItem(index).Complete(error);
         }
-    }
 
-    private sealed class WorkItem(T value, long acceptedTimestamp)
-    {
-        public T Value { get; } = value;
-
-        public long AcceptedTimestamp { get; } = acceptedTimestamp;
-
-        public TaskCompletionSource Completion { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        batch.Return();
     }
 }

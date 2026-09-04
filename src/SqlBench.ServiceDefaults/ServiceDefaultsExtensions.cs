@@ -12,7 +12,7 @@ public static class ServiceDefaultsExtensions
     {
         builder.Services.AddOpenTelemetry()
             .WithMetrics(metrics => metrics
-                .AddRuntimeInstrumentation()
+                .AddMeter("System.Runtime")
                 .AddMeter("SqlBench.*"))
             .WithTracing(tracing => tracing.AddSource("SqlBench.*"));
 

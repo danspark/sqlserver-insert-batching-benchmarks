@@ -22,15 +22,20 @@ internal sealed class ImmediateBatcher<T>(IBatchHandler<T> handler) : IProcessBa
             _handlerMilliseconds.Add(Stopwatch.GetElapsedTime(start).TotalMilliseconds);
         }
 
-        Exception? error = result.ItemErrors.Single();
+        if (result.Count != 1)
+        {
+            throw new InvalidOperationException("The immediate handler must return one item result.");
+        }
+
+        Exception? error = result.GetError(0);
         if (error is null)
         {
             Interlocked.Increment(ref _completed);
-            return new BatchSubmission(Task.CompletedTask);
+            return new BatchSubmission(ValueTask.CompletedTask);
         }
 
         Interlocked.Increment(ref _failed);
-        return new BatchSubmission(Task.FromException(error));
+        return new BatchSubmission(ValueTask.FromException(error));
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

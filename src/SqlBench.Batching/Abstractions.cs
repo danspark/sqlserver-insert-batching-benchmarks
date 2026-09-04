@@ -32,26 +32,54 @@ public interface IBatchHandler<T>
         CancellationToken cancellationToken);
 }
 
-public sealed record BatchHandlerResult
+public readonly record struct BatchHandlerResult
 {
-    public required IReadOnlyList<Exception?> ItemErrors { get; init; }
+    private readonly IReadOnlyList<Exception?>? _itemErrors;
 
-    public static BatchHandlerResult Success(int count) => new()
+    private BatchHandlerResult(int count, Exception? commonError, IReadOnlyList<Exception?>? itemErrors)
     {
-        ItemErrors = new Exception?[count]
-    };
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+        if (itemErrors is not null && itemErrors.Count != count)
+        {
+            throw new ArgumentException("The item error count must match the batch count.", nameof(itemErrors));
+        }
 
-    public static BatchHandlerResult Failure(int count, Exception error) => new()
+        Count = count;
+        CommonError = commonError;
+        _itemErrors = itemErrors;
+    }
+
+    public int Count { get; }
+
+    public Exception? CommonError { get; }
+
+    public static BatchHandlerResult Success(int count) => new(count, null, null);
+
+    public static BatchHandlerResult Failure(int count, Exception error)
     {
-        ItemErrors = Enumerable.Repeat<Exception?>(error, count).ToArray()
-    };
+        ArgumentNullException.ThrowIfNull(error);
+        return new BatchHandlerResult(count, error, null);
+    }
+
+    public static BatchHandlerResult FromItemErrors(IReadOnlyList<Exception?> itemErrors)
+    {
+        ArgumentNullException.ThrowIfNull(itemErrors);
+        return new BatchHandlerResult(itemErrors.Count, null, itemErrors);
+    }
+
+    public Exception? GetError(int index)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(index);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, Count);
+        return _itemErrors is null ? CommonError : _itemErrors[index];
+    }
 }
 
-public sealed class BatchSubmission
+public readonly record struct BatchSubmission
 {
-    public BatchSubmission(Task completion) => Completion = completion;
+    public BatchSubmission(ValueTask completion) => Completion = completion;
 
-    public Task Completion { get; }
+    public ValueTask Completion { get; }
 }
 
 public interface IProcessBatcher<T> : IHostedService, IAsyncDisposable

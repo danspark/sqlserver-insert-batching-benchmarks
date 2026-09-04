@@ -100,37 +100,70 @@ internal sealed class BenchmarkMessageDataReader(IReadOnlyList<BenchmarkMessage>
         return count;
     }
 
-    public bool IsDBNull(int index) => GetValue(index) is DBNull;
+    public bool IsDBNull(int index) => index switch
+    {
+        12 => Current.OptionalNote is null,
+        >= 0 and < 12 => false,
+        _ => throw new ArgumentOutOfRangeException(nameof(index), index, "Unknown column ordinal.")
+    };
 
-    public Guid GetGuid(int index) => (Guid)GetValue(index);
+    public Guid GetGuid(int index) => index switch
+    {
+        0 => Current.MessageId,
+        2 => Current.CorrelationId,
+        _ => throw new InvalidCastException(GetName(index))
+    };
 
-    public DateTime GetDateTime(int index) => (DateTime)GetValue(index);
+    public DateTime GetDateTime(int index) => index == 3
+        ? Current.OccurredAt
+        : throw new InvalidCastException(GetName(index));
 
-    public string GetString(int index) => (string)GetValue(index);
+    public string GetString(int index) => index switch
+    {
+        9 => Current.Code,
+        10 => Current.Description,
+        12 => Current.OptionalNote ?? throw new InvalidCastException(GetName(index)),
+        _ => throw new InvalidCastException(GetName(index))
+    };
 
-    public bool GetBoolean(int index) => (bool)GetValue(index);
+    public bool GetBoolean(int index) => index == 8
+        ? Current.IsActive
+        : throw new InvalidCastException(GetName(index));
 
     public byte GetByte(int index) => Convert.ToByte(GetValue(index), CultureInfo.InvariantCulture);
 
     public char GetChar(int index) => Convert.ToChar(GetValue(index), CultureInfo.InvariantCulture);
 
-    public short GetInt16(int index) => Convert.ToInt16(GetValue(index), CultureInfo.InvariantCulture);
+    public short GetInt16(int index) => index == 6
+        ? Current.Priority
+        : Convert.ToInt16(GetValue(index), CultureInfo.InvariantCulture);
 
-    public int GetInt32(int index) => Convert.ToInt32(GetValue(index), CultureInfo.InvariantCulture);
+    public int GetInt32(int index) => index switch
+    {
+        1 => Current.ParentId,
+        4 => Current.SequenceNo,
+        _ => Convert.ToInt32(GetValue(index), CultureInfo.InvariantCulture)
+    };
 
-    public long GetInt64(int index) => Convert.ToInt64(GetValue(index), CultureInfo.InvariantCulture);
+    public long GetInt64(int index) => index == 5
+        ? Current.CounterValue
+        : Convert.ToInt64(GetValue(index), CultureInfo.InvariantCulture);
 
     public float GetFloat(int index) => Convert.ToSingle(GetValue(index), CultureInfo.InvariantCulture);
 
     public double GetDouble(int index) => Convert.ToDouble(GetValue(index), CultureInfo.InvariantCulture);
 
-    public decimal GetDecimal(int index) => Convert.ToDecimal(GetValue(index), CultureInfo.InvariantCulture);
+    public decimal GetDecimal(int index) => index == 7
+        ? Current.Amount
+        : Convert.ToDecimal(GetValue(index), CultureInfo.InvariantCulture);
 
     public IDataReader GetData(int index) => throw new InvalidCastException(GetName(index));
 
     public long GetBytes(int index, long fieldOffset, byte[]? buffer, int bufferOffset, int length)
     {
-        byte[] source = (byte[])GetValue(index);
+        byte[] source = index == 11
+            ? Current.PayloadHash
+            : throw new InvalidCastException(GetName(index));
         if (buffer is null)
         {
             return source.Length;

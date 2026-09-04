@@ -20,7 +20,7 @@ public sealed class ChannelBatcherTests
             delay: TimeSpan.FromMilliseconds(30));
 
         BatchSubmission[] submissions = await SubmitAsync(batcher, 1, 2, 3, 4, 5);
-        await Task.WhenAll(submissions.Select(static item => item.Completion));
+        await Task.WhenAll(submissions.Select(static item => item.Completion.AsTask()));
         await batcher.StopAsync(CancellationToken.None);
 
         Assert.Contains(3, sizes);
@@ -73,7 +73,10 @@ public sealed class ChannelBatcherTests
 
         release.TrySetResult();
         BatchSubmission thirdSubmission = await third;
-        await Task.WhenAll(first.Completion, second.Completion, thirdSubmission.Completion);
+        await Task.WhenAll(
+            first.Completion.AsTask(),
+            second.Completion.AsTask(),
+            thirdSubmission.Completion.AsTask());
         await batcher.StopAsync(CancellationToken.None);
         Assert.True(batcher.GetMetrics().BackpressureEvents >= 1);
     }
@@ -99,8 +102,13 @@ public sealed class ChannelBatcherTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => batcher.SubmitAsync(3, cancellation.Token).AsTask());
         release.TrySetResult();
-        await Task.WhenAll(first.Completion, second.Completion);
+        await Task.WhenAll(first.Completion.AsTask(), second.Completion.AsTask());
+
+        BatchSubmission afterCancellation = await batcher.SubmitAsync(4);
+        await afterCancellation.Completion;
         await batcher.StopAsync(CancellationToken.None);
+
+        Assert.Equal(3, batcher.GetMetrics().CompletedItems);
     }
 
     [Fact]
@@ -114,7 +122,7 @@ public sealed class ChannelBatcherTests
         BatchSubmission[] submissions = await SubmitAsync(batcher, 1, 2, 3);
 
         await batcher.StopAsync(CancellationToken.None);
-        await Task.WhenAll(submissions.Select(static item => item.Completion));
+        await Task.WhenAll(submissions.Select(static item => item.Completion.AsTask()));
 
         Assert.Equal(3, batcher.GetMetrics().CompletedItems);
         Assert.Equal(3, batcher.GetMetrics().ActualBatchSize.Maximum);
@@ -133,7 +141,7 @@ public sealed class ChannelBatcherTests
         foreach (BatchSubmission submission in submissions)
         {
             InvalidOperationException actual = await Assert.ThrowsAsync<InvalidOperationException>(
-                () => submission.Completion);
+                () => submission.Completion.AsTask());
             Assert.Same(expected, actual);
         }
 
@@ -146,17 +154,15 @@ public sealed class ChannelBatcherTests
     {
         var expected = new InvalidOperationException("second item failed");
         await using ChannelBatcher<int> batcher = Create(
-            new DelegateHandler<int>((items, _) => ValueTask.FromResult(new BatchHandlerResult
-            {
-                ItemErrors = new Exception?[] { null, expected }
-            })),
+            new DelegateHandler<int>((items, _) => ValueTask.FromResult(
+                BatchHandlerResult.FromItemErrors([null, expected]))),
             batchSize: 2,
             delay: TimeSpan.FromMilliseconds(10));
         BatchSubmission[] submissions = await SubmitAsync(batcher, 1, 2);
 
         await submissions[0].Completion;
         InvalidOperationException actual = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => submissions[1].Completion);
+            () => submissions[1].Completion.AsTask());
         await batcher.StopAsync(CancellationToken.None);
 
         Assert.Same(expected, actual);
@@ -186,7 +192,7 @@ public sealed class ChannelBatcherTests
 
         await WaitUntilAsync(() => Volatile.Read(ref maximum) == 2, TimeSpan.FromSeconds(2));
         release.TrySetResult();
-        await Task.WhenAll(submissions.Select(static item => item.Completion));
+        await Task.WhenAll(submissions.Select(static item => item.Completion.AsTask()));
         await batcher.StopAsync(CancellationToken.None);
 
         Assert.Equal(2, maximum);
@@ -207,6 +213,34 @@ public sealed class ChannelBatcherTests
 
         Assert.Equal(0, calls);
         Assert.Equal(0, batcher.GetMetrics().CompletedItems);
+    }
+
+    [Fact]
+    public async Task ReusesPooledCompletionsAcrossBatches()
+    {
+        await using ChannelBatcher<int> batcher = Create(
+            new DelegateHandler<int>((items, _) =>
+                ValueTask.FromResult(BatchHandlerResult.Success(items.Count))),
+            batchSize: 1,
+            delay: TimeSpan.FromSeconds(1));
+
+        for (int index = 0; index < 2_000; index++)
+        {
+            BatchSubmission submission = await batcher.SubmitAsync(index);
+            await submission.Completion;
+        }
+
+        await batcher.StopAsync(CancellationToken.None);
+        Assert.Equal(2_000, batcher.GetMetrics().CompletedItems);
+    }
+
+    [Fact]
+    public void BatchHandlerResultValidatesIndexes()
+    {
+        BatchHandlerResult result = BatchHandlerResult.Success(1);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => result.GetError(-1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => result.GetError(1));
     }
 
     private static ChannelBatcher<int> Create(

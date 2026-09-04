@@ -66,9 +66,9 @@ Every strategy uses `READ COMMITTED`, full transaction-log commit semantics, the
 
 ## Process batching
 
-The `ChannelBatcher<T>` implementation uses a bounded `Channel<T>`, configurable handler concurrency, a maximum batch size, and a monotonic maximum-delay deadline. Bounded writes apply backpressure. Shutdown closes the writer and drains every accepted item before stopping. Each submission receives its own completion task. Metrics cover queue depth, channel wait, batch size, fill time, handler time, completions, failures, and backpressure.
+The `ChannelBatcher<T>` implementation uses a bounded `Channel<T>`, configurable handler concurrency, a maximum batch size, and a monotonic maximum-delay deadline. Bounded writes apply backpressure. Shutdown closes the writer and drains every accepted item before stopping. Pooled work items and batches keep the steady-state path allocation-light; each submission receives a single-consumer `ValueTask` that reports its own completion or failure. Metrics cover queue depth, channel wait, batch size, fill time, handler time, completions, failures, and backpressure without retaining an unbounded sample list.
 
-The `LockSwapBatcher<T>` implementation has no intermediate channel. Producers append under a short lock; a full buffer or periodic timer swaps ownership of the list with a new buffer. A capacity semaphore applies equivalent backpressure and a handler semaphore limits concurrency. It drains the final partial buffer on shutdown.
+The `LockSwapBatcher<T>` implementation has no intermediate channel. Producers append under a short lock; a full buffer or periodic timer swaps ownership of the pooled buffer. A capacity semaphore applies equivalent backpressure and a handler semaphore limits concurrency. It drains the final partial buffer on shutdown.
 
 The no-batching baseline invokes the handler immediately. It is used for individual insert per message and does not count as the second batching design.
 
@@ -76,7 +76,7 @@ The no-batching baseline invokes the handler immediately. It is used for individ
 
 The producer creates deterministic message IDs and payloads, publishes persistent messages to a durable queue, and waits for publisher confirms. Workers stay behind a start gate until the controller verifies the full ready-message count. Publication and process startup are outside the measured interval.
 
-Workers deserialize on delivery. A SQL-backed item becomes committed only after its transaction commits. The worker then acknowledges that delivery on its RabbitMQ channel. A message counts as completed only after both events succeed. The primary runs disable automatic connection recovery and application retry. A failed batch stops the worker, leaves its deliveries unacknowledged, and invalidates the run.
+Workers deserialize on delivery. A SQL-backed item becomes committed only after its transaction commits. Each RabbitMQ channel owns one acknowledgment pump that consumes successful item completions and issues one `BasicAck` per delivery in sequence. A message counts as completed only after its commit and acknowledgment both succeed. The primary runs disable automatic connection recovery and application retry. A failed batch stops the worker, leaves its deliveries unacknowledged, and invalidates the run.
 
 Delivery-to-commit and delivery-to-acknowledgment use `Stopwatch` timestamps inside the worker. Deliberate queue residence before the gate is not reported as latency. Delivered, committed, and acknowledged counts remain separate in every raw result.
 
@@ -384,6 +384,14 @@ See [setup and troubleshooting](docs/setup.md) for profile filters, overrides, A
 The unit suite checks maximum batch size and delay, bounded-channel backpressure, canceled producers, graceful drain, handler failure, per-item outcomes, handler concurrency, an empty stop, and the final partial batch. Integration tests exercise every SQL strategy at several logical workload sizes, verify all inserted IDs, test transaction rollback for every batched strategy, preserve an earlier committed individual insert when a later message fails, and prove that a failed transactional batch is requeued without acknowledgments.
 
 CI builds with nullable references and recommended analyzers enabled, runs unit tests, starts the pinned dependencies, and runs integration correctness tests. Primary performance data comes only from explicit local benchmark runs, never CI timing.
+
+## Runtime telemetry
+
+When `OTEL_EXPORTER_OTLP_ENDPOINT` is present, every measured worker exports as service `sqlbench-worker` with a stable `worker-N` instance ID. The Aspire Metrics page then exposes the built-in `System.Runtime` instruments for total allocated bytes, GC collections and pause time, heap size and fragmentation, process CPU and working set, JIT activity, locks, and the thread pool.
+
+The `SqlBench.Batching` meter publishes queue depth, backpressure, batch size, channel wait, fill time, handler time, and item outcomes. The `SqlBench.Worker` meter publishes deliveries, commits, acknowledgments, redeliveries, in-flight work, delivery-to-commit and delivery-to-acknowledgment latency, SQL execution time, transaction time, and failures. Instruments are process-wide and tag-free on the hot path; the worker process supplies instance identity as an OpenTelemetry resource attribute.
+
+Raw result files remain the authority for benchmark percentiles and process counters. Exact per-message latency samples use fixed, preallocated buffers; live batcher percentiles use a bounded logarithmic distribution and are therefore approximate.
 
 ## Limitations
 

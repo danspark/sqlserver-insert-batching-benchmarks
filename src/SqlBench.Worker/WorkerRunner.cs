@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using OpenTelemetry.Resources;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using SqlBench.Batching;
@@ -42,7 +44,31 @@ public static class WorkerRunner
         WorkerConfiguration config = await JsonSerializer.DeserializeAsync<WorkerConfiguration>(stream, JsonOptions)
             .ConfigureAwait(false)
             ?? throw new InvalidOperationException("Worker configuration was empty.");
-        return await ExecuteAsync(config).ConfigureAwait(false);
+
+        IHost? telemetryHost = null;
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")))
+        {
+            HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
+            builder.AddSqlBenchServiceDefaults();
+            builder.Services.AddOpenTelemetry().ConfigureResource(resource => resource.AddService(
+                serviceName: "sqlbench-worker",
+                serviceInstanceId: $"worker-{config.WorkerId}"));
+            telemetryHost = builder.Build();
+            await telemetryHost.StartAsync().ConfigureAwait(false);
+        }
+
+        try
+        {
+            return await ExecuteAsync(config).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (telemetryHost is not null)
+            {
+                await telemetryHost.StopAsync().ConfigureAwait(false);
+                telemetryHost.Dispose();
+            }
+        }
     }
 
     private static async Task<int> ExecuteAsync(WorkerConfiguration config)
@@ -51,11 +77,11 @@ public static class WorkerRunner
         using ILoggerFactory loggerFactory = LoggerFactory.Create(logging => logging
             .SetMinimumLevel(LogLevel.Warning)
             .AddSimpleConsole(options => options.SingleLine = true));
-        var sqlExecution = new ConcurrentBag<double>();
-        var transaction = new ConcurrentBag<double>();
+        var sqlExecution = new FixedConcurrentBuffer<double>(config.Scenario.RowCount);
+        var transaction = new FixedConcurrentBuffer<double>(config.Scenario.RowCount);
         var errors = new ConcurrentBag<string>();
-        var deliveryToCommit = new ConcurrentBag<long>();
-        var deliveryToAck = new ConcurrentBag<long>();
+        var deliveryToCommit = new FixedConcurrentBuffer<long>(config.Scenario.RowCount);
+        var deliveryToAck = new FixedConcurrentBuffer<long>(config.Scenario.RowCount);
         var handler = new WorkerBatchHandler(
             config.Scenario,
             new DatabaseManager(config.Runtime.SqlConnectionString).GetTargetConnectionString(),
@@ -67,13 +93,7 @@ public static class WorkerRunner
             loggerFactory);
         await batcher.StartAsync(CancellationToken.None).ConfigureAwait(false);
 
-        long delivered = 0;
-        long acknowledged = 0;
-        long redelivered = 0;
-        long lastAcknowledgmentTimestamp = 0;
-        long inFlight = 0;
-        long trackedId = 0;
-        var tracked = new ConcurrentDictionary<long, Task>();
+        var counters = new WorkerCounters();
         using var failure = new CancellationTokenSource();
 
         var factory = new ConnectionFactory
@@ -102,73 +122,60 @@ public static class WorkerRunner
                     prefetchSize: 0,
                     prefetchCount: config.Scenario.RabbitMqPrefetch,
                     global: false).ConfigureAwait(false);
-                var acknowledgmentLock = new SemaphoreSlim(1, 1);
+                var acknowledgments = new AcknowledgmentPump(
+                    channel,
+                    config.Scenario.RabbitMqPrefetch == 0
+                        ? config.Scenario.RowCount
+                        : config.Scenario.RabbitMqPrefetch,
+                    deliveryToCommit,
+                    deliveryToAck,
+                    errors,
+                    failure,
+                    counters);
                 var consumer = new AsyncEventingBasicConsumer(channel);
                 consumer.ReceivedAsync += async (sender, delivery) =>
                 {
                     _ = sender;
-                    Interlocked.Increment(ref inFlight);
+                    Interlocked.Increment(ref counters.InFlight);
+                    WorkerTelemetry.InFlight.Add(1);
                     bool completionOwnsInFlight = false;
+                    PendingMessage? pending = null;
                     try
                     {
                         BenchmarkMessage message = MessageSerializer.Deserialize(delivery.Body);
                         long deliveredAt = Stopwatch.GetTimestamp();
-                        Interlocked.Increment(ref delivered);
+                        Interlocked.Increment(ref counters.Delivered);
+                        WorkerTelemetry.Delivered.Add(1);
                         if (delivery.Redelivered)
                         {
-                            Interlocked.Increment(ref redelivered);
+                            Interlocked.Increment(ref counters.Redelivered);
+                            WorkerTelemetry.Redelivered.Add(1);
                         }
 
-                        var pending = new PendingMessage
-                        {
-                            Message = message,
-                            Channel = channel,
-                            DeliveryTag = delivery.DeliveryTag,
-                            DeliveredTimestamp = deliveredAt
-                        };
+                        pending = PendingMessage.Rent(
+                            message,
+                            delivery.DeliveryTag,
+                            deliveredAt);
                         BatchSubmission submission = await batcher.SubmitAsync(pending, failure.Token)
                             .ConfigureAwait(false);
-                        long id = Interlocked.Increment(ref trackedId);
-                        Task completion = CompleteAndAcknowledgeAsync(
-                            pending,
-                            submission,
-                            acknowledgmentLock,
-                            deliveryToCommit,
-                            deliveryToAck,
-                            errors,
-                            failure,
-                            acknowledgedAt =>
-                            {
-                                Interlocked.Increment(ref acknowledged);
-                                UpdateMaximum(ref lastAcknowledgmentTimestamp, acknowledgedAt);
-                            },
-                            () => Interlocked.Decrement(ref inFlight));
+                        acknowledgments.Track(pending, submission.Completion);
                         completionOwnsInFlight = true;
-                        tracked[id] = completion;
-                        _ = completion.ContinueWith(
-                            (completedTask, state) =>
-                            {
-                                var item = ((ConcurrentDictionary<long, Task> Tasks, long Id))state!;
-                                item.Tasks.TryRemove(item.Id, out _);
-                                _ = completedTask.Exception;
-                            },
-                            (tracked, id),
-                            CancellationToken.None,
-                            TaskContinuationOptions.ExecuteSynchronously,
-                            TaskScheduler.Default);
                     }
                     catch (Exception error)
                     {
                         if (!completionOwnsInFlight)
                         {
-                            Interlocked.Decrement(ref inFlight);
+                            pending?.Return();
+                            Interlocked.Decrement(ref counters.InFlight);
+                            WorkerTelemetry.InFlight.Add(-1);
                         }
 
                         errors.Add(error.ToString());
+                        WorkerTelemetry.Errors.Add(1);
                         failure.Cancel();
                     }
                 };
-                consumers.Add(new ConsumerRegistration(channel, acknowledgmentLock, consumer));
+                consumers.Add(new ConsumerRegistration(channel, acknowledgments, consumer));
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(config.ReadyFile)!);
@@ -192,13 +199,14 @@ public static class WorkerRunner
                     consumer: registration.Consumer).ConfigureAwait(false);
             }
 
-            await WaitForDrainAsync(config.Runtime, () => Interlocked.Read(ref inFlight), failure.Token)
+            await WaitForDrainAsync(config.Runtime, counters, failure.Token)
                 .ConfigureAwait(false);
             await File.WriteAllTextAsync(config.CompletionFile, "complete").ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (failure.IsCancellationRequested)
         {
             errors.Add("The worker stopped after a batch, consumer, or acknowledgment failure.");
+            WorkerTelemetry.Errors.Add(1);
         }
         finally
         {
@@ -216,18 +224,21 @@ public static class WorkerRunner
                 catch (Exception error)
                 {
                     errors.Add($"Consumer cancellation failed: {error.Message}");
+                    WorkerTelemetry.Errors.Add(1);
                 }
             }
 
             await batcher.StopAsync(CancellationToken.None).ConfigureAwait(false);
-            if (!tracked.IsEmpty)
+            await WaitForCommitContinuationsAsync(counters).ConfigureAwait(false);
+            foreach (ConsumerRegistration registration in consumers)
             {
-                await Task.WhenAll(tracked.Values).ConfigureAwait(false);
+                await registration.Acknowledgments.CompleteAsync().ConfigureAwait(false);
             }
+
+            await WaitForCompletionsAsync(counters).ConfigureAwait(false);
 
             foreach (ConsumerRegistration registration in consumers)
             {
-                registration.AcknowledgmentLock.Dispose();
                 await registration.Channel.DisposeAsync().ConfigureAwait(false);
             }
         }
@@ -236,16 +247,16 @@ public static class WorkerRunner
         var result = new WorkerRunResult
         {
             WorkerId = config.WorkerId,
-            DeliveredMessages = Interlocked.Read(ref delivered),
+            DeliveredMessages = Interlocked.Read(ref counters.Delivered),
             CommittedRows = config.Scenario.Mode == WorkloadMode.NoOpQueue ? 0 : handler.CommittedRows,
-            AcknowledgedMessages = Interlocked.Read(ref acknowledged),
-            RedeliveredMessages = Interlocked.Read(ref redelivered),
-            LastAcknowledgmentTimestamp = Interlocked.Read(ref lastAcknowledgmentTimestamp),
+            AcknowledgedMessages = Interlocked.Read(ref counters.Acknowledged),
+            RedeliveredMessages = Interlocked.Read(ref counters.Redelivered),
+            LastAcknowledgmentTimestamp = Interlocked.Read(ref counters.LastAcknowledgmentTimestamp),
             StopwatchFrequency = Stopwatch.Frequency,
-            DeliveryToCommitMicroseconds = [.. deliveryToCommit],
-            DeliveryToAcknowledgmentMicroseconds = [.. deliveryToAck],
-            SqlExecutionMilliseconds = [.. sqlExecution],
-            TransactionMilliseconds = [.. transaction],
+            DeliveryToCommitMicroseconds = deliveryToCommit.ToArray(),
+            DeliveryToAcknowledgmentMicroseconds = deliveryToAck.ToArray(),
+            SqlExecutionMilliseconds = sqlExecution.ToArray(),
+            TransactionMilliseconds = transaction.ToArray(),
             BatcherMetrics = batcher.GetMetrics(),
             Process = new ProcessMetrics
             {
@@ -293,49 +304,9 @@ public static class WorkerRunner
         };
     }
 
-    private static async Task CompleteAndAcknowledgeAsync(
-        PendingMessage pending,
-        BatchSubmission submission,
-        SemaphoreSlim acknowledgmentLock,
-        ConcurrentBag<long> deliveryToCommit,
-        ConcurrentBag<long> deliveryToAck,
-        ConcurrentBag<string> errors,
-        CancellationTokenSource failure,
-        Action<long> acknowledged,
-        Action completed)
-    {
-        try
-        {
-            await submission.Completion.ConfigureAwait(false);
-            deliveryToCommit.Add(ToMicroseconds(pending.DeliveredTimestamp, pending.CommittedTimestamp));
-            await acknowledgmentLock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-            try
-            {
-                await pending.Channel.BasicAckAsync(pending.DeliveryTag, multiple: false).ConfigureAwait(false);
-            }
-            finally
-            {
-                acknowledgmentLock.Release();
-            }
-
-            long acknowledgedAt = Stopwatch.GetTimestamp();
-            deliveryToAck.Add(ToMicroseconds(pending.DeliveredTimestamp, acknowledgedAt));
-            acknowledged(acknowledgedAt);
-        }
-        catch (Exception error)
-        {
-            errors.Add(error.ToString());
-            failure.Cancel();
-        }
-        finally
-        {
-            completed();
-        }
-    }
-
     private static async Task WaitForDrainAsync(
         RuntimeSettings settings,
-        Func<long> inFlight,
+        WorkerCounters counters,
         CancellationToken cancellationToken)
     {
         await using var queue = new RabbitQueueClient(settings);
@@ -344,7 +315,7 @@ public static class WorkerRunner
         {
             cancellationToken.ThrowIfCancellationRequested();
             QueueState state = await queue.ReadStateAsync(cancellationToken).ConfigureAwait(false);
-            if (state.Ready == 0 && state.Unacknowledged == 0 && inFlight() == 0)
+            if (state.Ready == 0 && state.Unacknowledged == 0 && Interlocked.Read(ref counters.InFlight) == 0)
             {
                 emptySamples++;
             }
@@ -357,21 +328,19 @@ public static class WorkerRunner
         }
     }
 
-    private static long ToMicroseconds(long start, long end) =>
-        (long)Math.Round(Stopwatch.GetElapsedTime(start, end).TotalMilliseconds * 1_000.0);
-
-    private static void UpdateMaximum(ref long target, long value)
+    private static async Task WaitForCompletionsAsync(WorkerCounters counters)
     {
-        long observed = Volatile.Read(ref target);
-        while (value > observed)
+        while (Interlocked.Read(ref counters.InFlight) != 0)
         {
-            long previous = Interlocked.CompareExchange(ref target, value, observed);
-            if (previous == observed)
-            {
-                return;
-            }
+            await Task.Delay(1).ConfigureAwait(false);
+        }
+    }
 
-            observed = previous;
+    private static async Task WaitForCommitContinuationsAsync(WorkerCounters counters)
+    {
+        while (Interlocked.Read(ref counters.CommitContinuations) != 0)
+        {
+            await Task.Delay(1).ConfigureAwait(false);
         }
     }
 
@@ -383,15 +352,16 @@ public static class WorkerRunner
 
     private sealed class ConsumerRegistration(
         IChannel channel,
-        SemaphoreSlim acknowledgmentLock,
+        AcknowledgmentPump acknowledgments,
         AsyncEventingBasicConsumer consumer)
     {
         public IChannel Channel { get; } = channel;
 
-        public SemaphoreSlim AcknowledgmentLock { get; } = acknowledgmentLock;
+        public AcknowledgmentPump Acknowledgments { get; } = acknowledgments;
 
         public AsyncEventingBasicConsumer Consumer { get; } = consumer;
 
         public string? ConsumerTag { get; set; }
     }
+
 }

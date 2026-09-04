@@ -19,7 +19,7 @@ public sealed class LockSwapBatcher<T> : IProcessBatcher<T>
     private readonly SemaphoreSlim _handlers;
     private readonly CancellationTokenSource _timerCancellation = new();
     private readonly ConcurrentDictionary<long, Task> _inFlight = new();
-    private List<WorkItem> _buffer;
+    private PooledBatch<T> _buffer;
     private Task? _timer;
     private long _taskId;
     private int _started;
@@ -36,7 +36,7 @@ public sealed class LockSwapBatcher<T> : IProcessBatcher<T>
         _logger = logger;
         _capacity = new SemaphoreSlim(options.Capacity, options.Capacity);
         _handlers = new SemaphoreSlim(options.HandlerConcurrency, options.HandlerConcurrency);
-        _buffer = new List<WorkItem>(options.MaximumBatchSize);
+        _buffer = PooledBatch<T>.Rent(options.MaximumBatchSize);
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -65,9 +65,9 @@ public sealed class LockSwapBatcher<T> : IProcessBatcher<T>
             await _capacity.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        var work = new WorkItem(item, Stopwatch.GetTimestamp());
+        PooledWorkItem<T> work = PooledWorkItem<T>.Rent(item, Stopwatch.GetTimestamp());
         _metrics.Accepted();
-        List<WorkItem>? ready = null;
+        PooledBatch<T>? ready = null;
         lock (_sync)
         {
             _buffer.Add(work);
@@ -82,7 +82,7 @@ public sealed class LockSwapBatcher<T> : IProcessBatcher<T>
             Track(ProcessBatchAsync(ready, CancellationToken.None));
         }
 
-        return new BatchSubmission(work.Completion.Task);
+        return new BatchSubmission(work.Completion);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
@@ -133,7 +133,7 @@ public sealed class LockSwapBatcher<T> : IProcessBatcher<T>
 
     private void Flush()
     {
-        List<WorkItem>? ready = null;
+        PooledBatch<T>? ready = null;
         lock (_sync)
         {
             if (_buffer.Count > 0)
@@ -148,10 +148,10 @@ public sealed class LockSwapBatcher<T> : IProcessBatcher<T>
         }
     }
 
-    private List<WorkItem> SwapBuffer()
+    private PooledBatch<T> SwapBuffer()
     {
-        List<WorkItem> ready = _buffer;
-        _buffer = new List<WorkItem>(_options.MaximumBatchSize);
+        PooledBatch<T> ready = _buffer;
+        _buffer = PooledBatch<T>.Rent(_options.MaximumBatchSize);
         return ready;
     }
 
@@ -172,25 +172,25 @@ public sealed class LockSwapBatcher<T> : IProcessBatcher<T>
             TaskScheduler.Default);
     }
 
-    private async Task ProcessBatchAsync(List<WorkItem> batch, CancellationToken cancellationToken)
+    private async Task ProcessBatchAsync(PooledBatch<T> batch, CancellationToken cancellationToken)
     {
         await _handlers.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             long handlerStart = Stopwatch.GetTimestamp();
-            long oldest = batch.Min(static item => item.AcceptedTimestamp);
-            foreach (WorkItem item in batch)
+            long oldest = batch.GetWorkItem(0).AcceptedTimestamp;
+            for (int index = 0; index < batch.Count; index++)
             {
+                PooledWorkItem<T> item = batch.GetWorkItem(index);
+                oldest = Math.Min(oldest, item.AcceptedTimestamp);
                 _metrics.Dequeued(item.AcceptedTimestamp);
             }
 
             BatchHandlerResult result;
             try
             {
-                result = await _handler.HandleAsync(
-                    batch.Select(static item => item.Value).ToArray(),
-                    cancellationToken).ConfigureAwait(false);
-                if (result.ItemErrors.Count != batch.Count)
+                result = await _handler.HandleAsync(batch, cancellationToken).ConfigureAwait(false);
+                if (result.Count != batch.Count)
                 {
                     throw new InvalidOperationException("The batch handler returned a result count that did not match the batch.");
                 }
@@ -207,18 +207,13 @@ public sealed class LockSwapBatcher<T> : IProcessBatcher<T>
 
             for (int index = 0; index < batch.Count; index++)
             {
-                Exception? error = result.ItemErrors[index];
+                Exception? error = result.GetError(index);
                 _metrics.Completed(error is null);
                 _capacity.Release();
-                if (error is null)
-                {
-                    batch[index].Completion.TrySetResult();
-                }
-                else
-                {
-                    batch[index].Completion.TrySetException(error);
-                }
+                batch.GetWorkItem(index).Complete(error);
             }
+
+            batch.Return();
         }
         finally
         {
@@ -226,13 +221,4 @@ public sealed class LockSwapBatcher<T> : IProcessBatcher<T>
         }
     }
 
-    private sealed class WorkItem(T value, long acceptedTimestamp)
-    {
-        public T Value { get; } = value;
-
-        public long AcceptedTimestamp { get; } = acceptedTimestamp;
-
-        public TaskCompletionSource Completion { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-    }
 }

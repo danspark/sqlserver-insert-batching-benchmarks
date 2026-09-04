@@ -1,4 +1,5 @@
 using System.Data;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using Microsoft.Data.SqlClient;
@@ -17,7 +18,7 @@ public sealed record SqlInsertOptions
     public bool BulkCopyEnableStreaming { get; init; } = true;
 }
 
-public sealed record SqlWriteTiming
+public readonly record struct SqlWriteTiming
 {
     public required TimeSpan SqlExecution { get; init; }
 
@@ -52,6 +53,28 @@ public static class SqlInsertStrategyFactory
 
 internal abstract class SqlInsertStrategyBase : ISqlInsertStrategy
 {
+    private static readonly string[][] ParameterNames = Enumerable.Range(0, SqlLimits.MaximumRowsPerParameterizedCommand)
+        .Select(static index => new[]
+        {
+            $"@messageId{index}",
+            $"@parentId{index}",
+            $"@correlationId{index}",
+            $"@occurredAt{index}",
+            $"@sequenceNo{index}",
+            $"@counterValue{index}",
+            $"@priority{index}",
+            $"@amount{index}",
+            $"@isActive{index}",
+            $"@code{index}",
+            $"@description{index}",
+            $"@payloadHash{index}",
+            $"@optionalNote{index}"
+        })
+        .ToArray();
+    private static readonly string[] RowParameterLists = ParameterNames
+        .Select(static names => $"({string.Join(',', names)})")
+        .ToArray();
+
     public abstract InsertStrategyKind Kind { get; }
 
     public virtual int MaximumBatchSize => 5_000;
@@ -102,29 +125,27 @@ internal abstract class SqlInsertStrategyBase : ISqlInsertStrategy
 
     protected static void AddRowParameters(SqlCommand command, BenchmarkMessage row, int index)
     {
-        Add(command, $"@messageId{index}", SqlDbType.UniqueIdentifier, row.MessageId);
-        Add(command, $"@parentId{index}", SqlDbType.Int, row.ParentId);
-        Add(command, $"@correlationId{index}", SqlDbType.UniqueIdentifier, row.CorrelationId);
-        Add(command, $"@occurredAt{index}", SqlDbType.DateTime2, row.OccurredAt).Scale = 3;
-        Add(command, $"@sequenceNo{index}", SqlDbType.Int, row.SequenceNo);
-        Add(command, $"@counterValue{index}", SqlDbType.BigInt, row.CounterValue);
-        Add(command, $"@priority{index}", SqlDbType.SmallInt, row.Priority);
-        SqlParameter amount = Add(command, $"@amount{index}", SqlDbType.Decimal, row.Amount);
+        string[] names = ParameterNames[index];
+        Add(command, names[0], SqlDbType.UniqueIdentifier, row.MessageId);
+        Add(command, names[1], SqlDbType.Int, row.ParentId);
+        Add(command, names[2], SqlDbType.UniqueIdentifier, row.CorrelationId);
+        Add(command, names[3], SqlDbType.DateTime2, row.OccurredAt).Scale = 3;
+        Add(command, names[4], SqlDbType.Int, row.SequenceNo);
+        Add(command, names[5], SqlDbType.BigInt, row.CounterValue);
+        Add(command, names[6], SqlDbType.SmallInt, row.Priority);
+        SqlParameter amount = Add(command, names[7], SqlDbType.Decimal, row.Amount);
         amount.Precision = 18;
         amount.Scale = 4;
-        Add(command, $"@isActive{index}", SqlDbType.Bit, row.IsActive);
-        Add(command, $"@code{index}", SqlDbType.VarChar, row.Code).Size = 32;
-        Add(command, $"@description{index}", SqlDbType.NVarChar, row.Description).Size = 128;
-        Add(command, $"@payloadHash{index}", SqlDbType.Binary, row.PayloadHash).Size = 16;
-        Add(command, $"@optionalNote{index}", SqlDbType.NVarChar, row.OptionalNote).Size = 64;
+        Add(command, names[8], SqlDbType.Bit, row.IsActive);
+        Add(command, names[9], SqlDbType.VarChar, row.Code).Size = 32;
+        Add(command, names[10], SqlDbType.NVarChar, row.Description).Size = 128;
+        Add(command, names[11], SqlDbType.Binary, row.PayloadHash).Size = 16;
+        Add(command, names[12], SqlDbType.NVarChar, row.OptionalNote).Size = 64;
     }
 
-    protected static string RowParameterList(int index) =>
-        $"(@messageId{index},@parentId{index},@correlationId{index},@occurredAt{index}," +
-        $"@sequenceNo{index},@counterValue{index},@priority{index},@amount{index}," +
-        $"@isActive{index},@code{index},@description{index},@payloadHash{index},@optionalNote{index})";
+    protected static string RowParameterList(int index) => RowParameterLists[index];
 
-    protected static string InsertPrefix => """
+    protected const string InsertPrefix = """
         INSERT dbo.BenchmarkTarget
         (MessageId,ParentId,CorrelationId,OccurredAt,SequenceNo,CounterValue,Priority,Amount,IsActive,Code,Description,PayloadHash,OptionalNote)
         VALUES
@@ -165,6 +186,8 @@ internal sealed class IndividualInsertStrategy : SqlInsertStrategyBase
 
 internal sealed class MultipleStatementsInsertStrategy : SqlInsertStrategyBase
 {
+    private static readonly ConcurrentDictionary<int, string> CommandTexts = new();
+
     public override InsertStrategyKind Kind => InsertStrategyKind.MultipleInsertStatements;
 
     public override int MaximumBatchSize => SqlLimits.MaximumRowsPerParameterizedCommand;
@@ -179,20 +202,29 @@ internal sealed class MultipleStatementsInsertStrategy : SqlInsertStrategyBase
         await using SqlCommand command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandTimeout = options.CommandTimeoutSeconds;
-        var sql = new StringBuilder(rows.Count * 360);
+        command.CommandText = CommandTexts.GetOrAdd(rows.Count, static count =>
+        {
+            var sql = new StringBuilder(count * 360);
+            for (int index = 0; index < count; index++)
+            {
+                sql.Append(InsertPrefix).Append(RowParameterList(index)).AppendLine(";");
+            }
+
+            return sql.ToString();
+        });
         for (int index = 0; index < rows.Count; index++)
         {
-            sql.Append(InsertPrefix).Append(RowParameterList(index)).AppendLine(";");
             AddRowParameters(command, rows[index], index);
         }
 
-        command.CommandText = sql.ToString();
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 }
 
 internal sealed class MultiRowValuesInsertStrategy : SqlInsertStrategyBase
 {
+    private static readonly ConcurrentDictionary<int, string> CommandTexts = new();
+
     public override InsertStrategyKind Kind => InsertStrategyKind.MultiRowValues;
 
     public override int MaximumBatchSize => SqlLimits.MaximumRowsPerParameterizedCommand;
@@ -207,19 +239,26 @@ internal sealed class MultiRowValuesInsertStrategy : SqlInsertStrategyBase
         await using SqlCommand command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandTimeout = options.CommandTimeoutSeconds;
-        var sql = new StringBuilder(rows.Count * 210).Append(InsertPrefix);
-        for (int index = 0; index < rows.Count; index++)
+        command.CommandText = CommandTexts.GetOrAdd(rows.Count, static count =>
         {
-            if (index > 0)
+            var sql = new StringBuilder(count * 210).Append(InsertPrefix);
+            for (int index = 0; index < count; index++)
             {
-                sql.Append(',');
+                if (index > 0)
+                {
+                    sql.Append(',');
+                }
+
+                sql.AppendLine().Append(RowParameterList(index));
             }
 
-            sql.AppendLine().Append(RowParameterList(index));
+            return sql.Append(';').ToString();
+        });
+        for (int index = 0; index < rows.Count; index++)
+        {
             AddRowParameters(command, rows[index], index);
         }
 
-        command.CommandText = sql.Append(';').ToString();
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 }
@@ -269,8 +308,9 @@ internal sealed class TableValuedParameterInsertStrategy : SqlInsertStrategyBase
     private static IEnumerable<SqlDataRecord> StreamRecords(IReadOnlyList<BenchmarkMessage> rows)
     {
         var record = new SqlDataRecord(Metadata);
-        foreach (BenchmarkMessage row in rows)
+        for (int index = 0; index < rows.Count; index++)
         {
+            BenchmarkMessage row = rows[index];
             record.SetGuid(0, row.MessageId);
             record.SetInt32(1, row.ParentId);
             record.SetGuid(2, row.CorrelationId);
