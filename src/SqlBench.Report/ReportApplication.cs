@@ -118,6 +118,11 @@ internal static class ReportApplication
         text.AppendLine("## Measured results");
         text.AppendLine();
         text.AppendLine($"Generated from {all.Count} raw scenario files. {valid.Count} passed every correctness check.");
+        string measuredCommits = string.Join(", ", valid
+            .GroupBy(static result => result.GitCommit)
+            .OrderBy(static group => group.Key)
+            .Select(static group => $"`{group.Key[..Math.Min(7, group.Key.Length)]}` ({group.Count()} runs)"));
+        text.AppendLine($"Measured binaries: {measuredCommits}.");
         text.AppendLine();
         if (noOp is not null)
         {
@@ -183,22 +188,66 @@ internal static class ReportApplication
                 double[] durations = group.Select(static result => result.DurationSeconds).Order().ToArray();
                 text.AppendLine(
                     $"| {StrategyName(group.Key)} | {group.Count()} | {config.RowCount:N0} | " +
-                    $"{config.WorkerInstances} workers x {config.WritersPerInstance} writers, batch {config.BatchSize:N0} | " +
+                    $"{config.WorkerInstances} worker{(config.WorkerInstances == 1 ? string.Empty : "s")} x " +
+                    $"{config.WritersPerInstance} writer{(config.WritersPerInstance == 1 ? string.Empty : "s")}, batch {config.BatchSize:N0} | " +
                     $"{Median(rates):N0} | {rates[0]:N0}–{rates[^1]:N0} | {Median(latencies):N2} ms | " +
                     $"{Median(durations):N2} s |");
+            }
+
+            text.AppendLine();
+            text.AppendLine("### Confirmation resource use");
+            text.AppendLine();
+            text.AppendLine("Each row is the repetition nearest that finalist's median throughput. Worker peak RSS is the sum of per-process peaks; the SQL values are DMV deltas over the run. Full before/after metrics, waits, GC counts, and one-second container samples remain in the raw artifacts.");
+            text.AppendLine();
+            text.AppendLine("| Strategy | App CPU | Worker peak RSS | Allocated | SQL CPU | SQL writes | SQL write stall | WRITELOG wait | Rabbit memory |");
+            text.AppendLine("|---|---:|---:|---:|---:|---:|---:|---:|---:|");
+            foreach (IGrouping<InsertStrategyKind, ScenarioResult> group in confirmations)
+            {
+                double[] rates = group.Select(static result => result.CommittedRowsPerSecond).Order().ToArray();
+                double medianRate = Median(rates);
+                ScenarioResult representative = group.MinBy(result =>
+                    Math.Abs(result.CommittedRowsPerSecond - medianRate))!;
+                double appCpuSeconds = representative.Workers.Sum(static worker => worker.Process.CpuSeconds);
+                long peakWorkingSetBytes = representative.Workers.Sum(static worker => worker.Process.PeakWorkingSetBytes);
+                long allocatedBytes = representative.Workers.Sum(static worker => worker.Process.AllocatedBytes);
+                long sqlCpuMilliseconds = Math.Max(0,
+                    representative.SqlServerAfter.ProcessKernelTimeMilliseconds
+                    + representative.SqlServerAfter.ProcessUserTimeMilliseconds
+                    - representative.SqlServerBefore.ProcessKernelTimeMilliseconds
+                    - representative.SqlServerBefore.ProcessUserTimeMilliseconds);
+                long sqlWrites = Math.Max(0,
+                    representative.SqlServerAfter.BytesWritten - representative.SqlServerBefore.BytesWritten);
+                long sqlWriteStall = Math.Max(0,
+                    representative.SqlServerAfter.WriteStallMilliseconds
+                    - representative.SqlServerBefore.WriteStallMilliseconds);
+                long writeLogWait = WaitDelta(representative, "WRITELOG");
+                text.AppendLine(
+                    $"| {StrategyName(group.Key)} | {appCpuSeconds:N1} s | {ToMebibytes(peakWorkingSetBytes):N0} MiB | " +
+                    $"{ToGibibytes(allocatedBytes):N2} GiB | {sqlCpuMilliseconds / 1_000.0:N1} s | " +
+                    $"{ToMebibytes(sqlWrites):N0} MiB | {sqlWriteStall:N0} ms | {writeLogWait:N0} ms | " +
+                    $"{ToMebibytes(representative.RabbitMqAfter.MemoryBytes):N0} MiB |");
             }
         }
 
         text.AppendLine();
         text.AppendLine("### Direct-to-database controls");
         text.AppendLine();
-        text.AppendLine("| Strategy | Writers | Batch | Direct rows/s | Best queue rows/s | Queue/direct | p50 commit delta | SQL p50 | Transaction p50 |");
+        text.AppendLine("| Strategy | Writers | Batch | Direct rows/s | Comparable queue rows/s | Queue/direct | p50 commit delta | SQL p50 | Transaction p50 |");
         text.AppendLine("|---|---:|---:|---:|---:|---:|---:|---:|---:|");
         foreach (ScenarioResult result in bestDirect)
         {
             Scenario config = result.Configuration;
-            ScenarioResult? queueResult = bestQueue.FirstOrDefault(queue =>
-                queue.Configuration.Strategy == config.Strategy);
+            ScenarioResult? queueResult = valid
+                .Where(queue => queue.Configuration.Mode == WorkloadMode.Queue
+                    && queue.Configuration.Strategy == config.Strategy
+                    && queue.Configuration.Batching == config.Batching
+                    && queue.Configuration.WorkerInstances == config.WorkerInstances
+                    && queue.Configuration.WritersPerInstance == config.WritersPerInstance
+                    && queue.Configuration.BatchSize == config.BatchSize
+                    && queue.Configuration.Distribution == config.Distribution)
+                .OrderByDescending(static queue => queue.Configuration.RowCount)
+                .ThenByDescending(static queue => queue.CommittedRowsPerSecond)
+                .FirstOrDefault();
             double queueRate = queueResult?.CommittedRowsPerSecond ?? 0;
             double throughputRatio = result.CommittedRowsPerSecond == 0 ? 0 : queueRate / result.CommittedRowsPerSecond;
             double latencyDelta = (queueResult?.DeliveryToCommitMilliseconds.P50 ?? 0)
@@ -208,6 +257,9 @@ internal static class ReportApplication
                 $"{result.CommittedRowsPerSecond:N0} | {queueRate:N0} | {throughputRatio:P1} | {latencyDelta:N2} ms | " +
                 $"{result.SqlExecutionMilliseconds.P50:N2} ms | {result.TransactionMilliseconds.P50:N2} ms |");
         }
+
+        text.AppendLine();
+        text.AppendLine("These direct controls are single 10,000-row runs, so the ratios estimate pipeline overhead rather than isolate it. A ratio above 100% reflects observed run-order and concurrency variance; it is not negative RabbitMQ overhead.");
 
         text.AppendLine();
         text.AppendLine("### Worker scaling");
@@ -284,6 +336,21 @@ internal static class ReportApplication
     private static double Median(double[] sorted) => sorted.Length % 2 == 0
         ? (sorted[(sorted.Length / 2) - 1] + sorted[sorted.Length / 2]) / 2
         : sorted[sorted.Length / 2];
+
+    private static long WaitDelta(ScenarioResult result, string waitType)
+    {
+        long before = result.SqlServerBefore.Waits
+            .FirstOrDefault(wait => string.Equals(wait.WaitType, waitType, StringComparison.Ordinal))
+            ?.WaitTimeMilliseconds ?? 0;
+        long after = result.SqlServerAfter.Waits
+            .FirstOrDefault(wait => string.Equals(wait.WaitType, waitType, StringComparison.Ordinal))
+            ?.WaitTimeMilliseconds ?? 0;
+        return Math.Max(0, after - before);
+    }
+
+    private static double ToMebibytes(long bytes) => bytes / 1_048_576.0;
+
+    private static double ToGibibytes(long bytes) => bytes / 1_073_741_824.0;
 
     private static async Task WriteCsvAsync(
         string path,

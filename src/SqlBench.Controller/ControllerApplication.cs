@@ -354,6 +354,13 @@ internal static class ControllerApplication
         List<string> errors)
     {
         double seconds = Math.Max(duration.TotalSeconds, double.Epsilon);
+        WorkerRunResult[] compactWorkers = workers.Select(static worker => worker with
+        {
+            DeliveryToCommitMicroseconds = [],
+            DeliveryToAcknowledgmentMicroseconds = [],
+            SqlExecutionMilliseconds = [],
+            TransactionMilliseconds = []
+        }).ToArray();
         return new ScenarioResult
         {
             ScenarioName = scenario.Name,
@@ -372,7 +379,7 @@ internal static class ControllerApplication
             DeliveryToAcknowledgmentMilliseconds = PercentileSummary.FromMicroseconds(workers.SelectMany(static worker => worker.DeliveryToAcknowledgmentMicroseconds)),
             SqlExecutionMilliseconds = PercentileSummary.FromMilliseconds(workers.SelectMany(static worker => worker.SqlExecutionMilliseconds)),
             TransactionMilliseconds = PercentileSummary.FromMilliseconds(workers.SelectMany(static worker => worker.TransactionMilliseconds)),
-            Workers = workers,
+            Workers = compactWorkers,
             SqlServerBefore = sqlBefore,
             SqlServerAfter = sqlAfter,
             RabbitMqBefore = rabbitBefore,
