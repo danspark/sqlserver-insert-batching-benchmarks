@@ -16,6 +16,12 @@ public enum BatchingKind
     LockSwap
 }
 
+public enum SqlExecutionKind
+{
+    Native,
+    SqlBatch
+}
+
 public enum WorkloadMode
 {
     Queue,
@@ -71,6 +77,8 @@ public sealed record Scenario
 
     public BatchingKind Batching { get; init; } = BatchingKind.Channel;
 
+    public SqlExecutionKind SqlExecution { get; init; } = SqlExecutionKind.Native;
+
     public ParentDistribution Distribution { get; init; } = ParentDistribution.Uniform;
 
     public int Seed { get; init; } = 0x5EED_2026;
@@ -88,6 +96,12 @@ public sealed record Scenario
     public int ChannelCapacity { get; init; } = 2_000;
 
     public ushort RabbitMqPrefetch { get; init; } = 400;
+
+    public int SqlBatchMaximumCommands { get; init; } = 1;
+
+    public int SqlBatchMaximumDelayMilliseconds { get; init; } = 1;
+
+    public int SqlBatchRequestConcurrency { get; init; } = 1;
 
     public int CommandTimeoutSeconds { get; init; } = 120;
 
@@ -107,9 +121,19 @@ public sealed record Scenario
         ArgumentOutOfRangeException.ThrowIfLessThan(RowCount, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(WorkerInstances, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(WritersPerInstance, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(WritersPerInstance, ushort.MaxValue);
         ArgumentOutOfRangeException.ThrowIfLessThan(BatchSize, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(MaximumBatchingDelayMilliseconds, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(ChannelCapacity, BatchSize);
+        ArgumentOutOfRangeException.ThrowIfLessThan(SqlBatchMaximumCommands, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            SqlBatchMaximumCommands,
+            SqlLimits.MaximumSqlBatchCommandsPerRequest);
+        ArgumentOutOfRangeException.ThrowIfLessThan(SqlBatchMaximumDelayMilliseconds, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(SqlBatchRequestConcurrency, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            SqlBatchRequestConcurrency,
+            SqlLimits.MaximumSqlBatchRequestConcurrency);
 
         int maximum = SqlLimits.MaximumRowsPerParameterizedCommand;
         if (Strategy is InsertStrategyKind.MultipleInsertStatements or InsertStrategyKind.MultiRowValues
@@ -129,6 +153,37 @@ public sealed record Scenario
         {
             throw new ArgumentException("The no-batching path requires a batch size of 1.");
         }
+
+        if (SqlExecution == SqlExecutionKind.SqlBatch && Strategy == InsertStrategyKind.BulkCopy)
+        {
+            throw new ArgumentException("SqlBulkCopy cannot execute through SqlBatch.");
+        }
+
+        if (SqlExecution == SqlExecutionKind.SqlBatch && SqlBatchMaximumCommands > WritersPerInstance)
+        {
+            throw new ArgumentException(
+                "SqlBatch maximum commands cannot exceed the writers available inside one worker instance.");
+        }
+
+        if (SqlExecution == SqlExecutionKind.SqlBatch && SqlBatchRequestConcurrency > WritersPerInstance)
+        {
+            throw new ArgumentException(
+                "SqlBatch request concurrency cannot exceed the writers available inside one worker instance.");
+        }
+
+        if (SqlExecution == SqlExecutionKind.SqlBatch
+            && (long)SqlBatchMaximumCommands * SqlBatchRequestConcurrency * 2 > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(SqlBatchRequestConcurrency),
+                "The SqlBatch coordinator channel capacity exceeds the supported range.");
+        }
+
+        if (Mode == WorkloadMode.DirectDatabase && WorkerInstances != 1)
+        {
+            throw new ArgumentException(
+                "Direct-to-database controls model one process and require one worker instance.");
+        }
     }
 }
 
@@ -145,7 +200,11 @@ public static class SqlLimits
 {
     public const int ParametersPerRow = 13;
     public const int SqlServerParameterLimit = 2_100;
-    public const int MaximumRowsPerParameterizedCommand = SqlServerParameterLimit / ParametersPerRow;
+    public const int SqlBatchMarkerParameterCount = 1;
+    public const int MaximumSqlBatchCommandsPerRequest = 64;
+    public const int MaximumSqlBatchRequestConcurrency = 64;
+    public const int MaximumRowsPerParameterizedCommand =
+        (SqlServerParameterLimit - SqlBatchMarkerParameterCount) / ParametersPerRow;
 }
 
 public sealed record RuntimeSettings

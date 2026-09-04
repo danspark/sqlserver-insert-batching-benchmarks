@@ -2,7 +2,7 @@
 
 ## Script behavior
 
-`scripts/run-benchmarks.ps1` verifies `docker`, Docker Compose, `dotnet`, and `pwsh`; builds Release; starts only the `sqlserver` and `rabbitmq` Compose services; waits for their health checks; runs the selected controller profile; samples container statistics; validates results; regenerates the CSV, README tables, and SVG charts; and removes only Compose resources it created. `-LeaveRunning` keeps those resources. `-UseRunningEnvironment` leaves lifecycle management to the caller and requires connection environment variables.
+`scripts/run-benchmarks.ps1` verifies `docker`, Docker Compose, `dotnet`, and `pwsh`; builds Release; starts only the `sqlserver` and `rabbitmq` Compose services; waits for their health checks; runs the selected controller profile; samples container statistics; validates results; generates a CSV, report, and SVG charts inside the result directory; and removes only Compose resources it created. `-UpdateReadme` writes a complete profile under `results/published`, then rebuilds the repository's canonical tables and charts from all published raw results. It rejects `-Scenario`, `-Rows`, and output directories outside `results/published`, which keeps a filtered diagnostic run from replacing the published aggregate. `-LeaveRunning` keeps created resources. `-UseRunningEnvironment` leaves lifecycle management to the caller and requires connection environment variables.
 
 Use `-Scenario <text>` to select names containing text and `-Rows <count>` for a diagnostic row-count override. An override changes comparability and should not be mixed with published matrix results.
 
@@ -12,7 +12,7 @@ Use `-Scenario <text>` to select names containing text and `-Rows <count>` for a
 
 The benchmark script manages measured worker processes itself so it can place every process behind the same gate and collect one result file per instance. A measured worker starts its telemetry provider when the calling environment includes `OTEL_EXPORTER_OTLP_ENDPOINT`; it appears in the dashboard as `sqlbench-worker`, with each process identified by `worker-N`. Copy the controller resource's `OTEL_*` environment into the shell together with the required `SQLBENCH_*` connection settings before using `-UseRunningEnvironment`. `OTEL_METRIC_EXPORT_INTERVAL=1000` gives one-second samples for short smoke runs.
 
-The Metrics page groups benchmark instruments under `SqlBench.Batching` and `SqlBench.Worker`. Runtime allocation and GC instruments are under `System.Runtime`; useful starting points are `dotnet.gc.heap.total_allocated`, `dotnet.gc.collections`, `dotnet.gc.pause.time`, `dotnet.gc.last_collection.heap.size`, `dotnet.process.cpu.time`, and `dotnet.process.memory.working_set`.
+The Metrics page groups benchmark instruments under `SqlBench.Batching`, `SqlBench.Worker`, and `SqlBench.SqlClient`. The SQL client meter shows DML execute calls, submitted commands, commands per execute, execute time, coalescing delay, active calls, coordinator depth, coordinator wait, and coordinator backpressure. The DML execute counter excludes native transaction begin and commit operations. Runtime allocation and GC instruments are under `System.Runtime`; useful starting points are `dotnet.gc.heap.total_allocated`, `dotnet.gc.collections`, `dotnet.gc.pause.time`, `dotnet.gc.last_collection.heap.size`, `dotnet.process.cpu.time`, and `dotnet.process.memory.working_set`.
 
 Stop Aspire before running the script-managed Compose environment on the same ports.
 

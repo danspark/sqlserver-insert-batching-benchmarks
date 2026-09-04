@@ -4,7 +4,7 @@ using SqlBench.Core;
 
 namespace SqlBench.Worker;
 
-internal sealed class WorkerBatchHandler : IBatchHandler<PendingMessage>
+internal sealed class WorkerBatchHandler : IBatchHandler<PendingMessage>, IAsyncDisposable
 {
     private readonly string _connectionString;
     private readonly ISqlInsertStrategy? _strategy;
@@ -22,7 +22,12 @@ internal sealed class WorkerBatchHandler : IBatchHandler<PendingMessage>
         _connectionString = connectionString;
         _strategy = scenario.Mode == WorkloadMode.NoOpQueue
             ? null
-            : SqlInsertStrategyFactory.Create(scenario.Strategy);
+            : SqlInsertStrategyFactory.Create(
+                scenario.Strategy,
+                scenario.SqlExecution,
+                scenario.SqlBatchMaximumCommands,
+                scenario.SqlBatchMaximumDelayMilliseconds,
+                scenario.SqlBatchRequestConcurrency);
         _options = new SqlInsertOptions
         {
             CommandTimeoutSeconds = scenario.CommandTimeoutSeconds,
@@ -35,6 +40,11 @@ internal sealed class WorkerBatchHandler : IBatchHandler<PendingMessage>
     }
 
     public long CommittedRows => Interlocked.Read(ref _committedRows);
+
+    public SqlRequestMetricsSnapshot GetSqlRequestMetrics() =>
+        _strategy?.GetRequestMetrics() ?? new SqlRequestMetricsSnapshot();
+
+    public ValueTask DisposeAsync() => _strategy?.DisposeAsync() ?? ValueTask.CompletedTask;
 
     public async ValueTask<BatchHandlerResult> HandleAsync(
         IReadOnlyList<PendingMessage> items,

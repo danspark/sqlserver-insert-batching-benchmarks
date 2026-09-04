@@ -66,7 +66,12 @@ internal static class ControllerApplication
         foreach (Scenario source in RotateScenarios(scenarios))
         {
             source.Validate();
-            string implementation = $"{source.Mode}/{source.Strategy}/{source.Batching}";
+            string implementation = source.SqlExecution == SqlExecutionKind.SqlBatch
+                ? $"{source.Mode}/{source.Strategy}/{source.Batching}/{source.SqlExecution}" +
+                  $"/commands:{source.SqlBatchMaximumCommands}" +
+                  $"/lanes:{source.SqlBatchRequestConcurrency}" +
+                  $"/delay:{source.SqlBatchMaximumDelayMilliseconds}ms"
+                : $"{source.Mode}/{source.Strategy}/{source.Batching}/{source.SqlExecution}";
             if (warmed.Add(implementation))
             {
                 Scenario warmup = source with
@@ -245,6 +250,8 @@ internal static class ControllerApplication
         bool correct = databaseVerification.Passed(expectedDatabaseRows)
             && finalQueue.Ready == 0
             && finalQueue.Unacknowledged == 0
+            && delivered == scenario.RowCount
+            && committed == expectedDatabaseRows
             && acknowledged == scenario.RowCount
             && errors.Count == 0;
         return CreateResult(
@@ -262,7 +269,12 @@ internal static class ControllerApplication
     {
         DatabaseMetrics sqlBefore = await database.ReadMetricsAsync(CancellationToken.None).ConfigureAwait(false);
         RabbitMqMetrics rabbitBefore = await queue.ReadBrokerMetricsAsync(CancellationToken.None).ConfigureAwait(false);
-        ISqlInsertStrategy strategy = SqlInsertStrategyFactory.Create(scenario.Strategy);
+        await using ISqlInsertStrategy strategy = SqlInsertStrategyFactory.Create(
+            scenario.Strategy,
+            scenario.SqlExecution,
+            scenario.SqlBatchMaximumCommands,
+            scenario.SqlBatchMaximumDelayMilliseconds,
+            scenario.SqlBatchRequestConcurrency);
         var options = new SqlInsertOptions
         {
             CommandTimeoutSeconds = scenario.CommandTimeoutSeconds,
@@ -324,6 +336,7 @@ internal static class ControllerApplication
             DeliveryToAcknowledgmentMicroseconds = [],
             SqlExecutionMilliseconds = [.. sqlDurations],
             TransactionMilliseconds = [.. transactionDurations],
+            SqlRequests = strategy.GetRequestMetrics(),
             BatcherMetrics = EmptyBatcherMetrics(),
             Process = new ProcessMetrics(),
             Errors = []
@@ -501,13 +514,19 @@ internal static class ControllerApplication
     private static int StageRank(string stage) => stage switch
     {
         "control" => 0,
-        "broad" => 1,
+        "broad" or "single-command-control" => 1,
         "refine-batch" or "refine-delay" or "refine-capacity" or "refine-prefetch" or
-            "refine-batcher" or "refine-concurrency" => 2,
-        "scaling" => 3,
-        "direct-control" => 4,
-        "finalist" => 5,
-        _ => 6
+            "refine-batcher" or "refine-concurrency" or "sqlbatch-control" or "writer-scaling" or
+            "sqlbatch-writers" => 2,
+        "command-cap" or "sqlbatch-commands" => 3,
+        "request-concurrency" => 4,
+        "delay" or "sqlbatch-delay" => 5,
+        "distribution" => 6,
+        "instance-scaling" or "scaling" => 7,
+        "direct-control" => 8,
+        "finalist" => 9,
+        "confirmation" => 10,
+        _ => 11
     };
 
     private static string RequireOption(string[] args, string name) =>
@@ -523,21 +542,35 @@ internal static class ControllerApplication
     {
         try
         {
-            var info = new ProcessStartInfo("git", "rev-parse HEAD")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false
-            };
-            using Process process = Process.Start(info)!;
-            string commit = process.StandardOutput.ReadToEnd().Trim();
-            process.WaitForExit();
-            return process.ExitCode == 0 ? commit : "uncommitted";
+            string commit = RunGit("rev-parse", "HEAD");
+            string status = RunGit("status", "--porcelain");
+            return status.Length == 0 ? commit : $"{commit}-dirty";
         }
         catch
         {
             return "uncommitted";
         }
+    }
+
+    private static string RunGit(params string[] arguments)
+    {
+        var info = new ProcessStartInfo("git")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        foreach (string argument in arguments)
+        {
+            info.ArgumentList.Add(argument);
+        }
+
+        using Process process = Process.Start(info)!;
+        string output = process.StandardOutput.ReadToEnd().Trim();
+        process.WaitForExit();
+        return process.ExitCode == 0
+            ? output
+            : throw new InvalidOperationException(process.StandardError.ReadToEnd().Trim());
     }
 
     private static string SafeFileName(string name)

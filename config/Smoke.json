@@ -25,6 +25,34 @@
       "rabbitMqPrefetch": 100
     },
     {
+      "name": "smoke-individual-sqlbatch-single-command-queue",
+      "strategy": "Individual",
+      "batching": "None",
+      "sqlExecution": "SqlBatch",
+      "rowCount": 500,
+      "workerInstances": 1,
+      "writersPerInstance": 1,
+      "batchSize": 1,
+      "channelCapacity": 100,
+      "rabbitMqPrefetch": 100,
+      "sqlBatchMaximumCommands": 1,
+      "sqlBatchMaximumDelayMilliseconds": 1
+    },
+    {
+      "name": "smoke-individual-sqlbatch-coalesced-queue",
+      "strategy": "Individual",
+      "batching": "None",
+      "sqlExecution": "SqlBatch",
+      "rowCount": 500,
+      "workerInstances": 1,
+      "writersPerInstance": 4,
+      "batchSize": 1,
+      "channelCapacity": 100,
+      "rabbitMqPrefetch": 100,
+      "sqlBatchMaximumCommands": 4,
+      "sqlBatchMaximumDelayMilliseconds": 1
+    },
+    {
       "name": "smoke-tvp-queue",
       "strategy": "TableValuedParameter",
       "rowCount": 2000,
@@ -66,6 +94,45 @@
       "rabbitMqPrefetch": 1000
     },
     {
+      "name": "smoke-tvp-sqlbatch-queue",
+      "strategy": "TableValuedParameter",
+      "sqlExecution": "SqlBatch",
+      "rowCount": 2000,
+      "workerInstances": 1,
+      "writersPerInstance": 4,
+      "batchSize": 100,
+      "channelCapacity": 2000,
+      "rabbitMqPrefetch": 400,
+      "sqlBatchMaximumCommands": 4,
+      "sqlBatchMaximumDelayMilliseconds": 1
+    },
+    {
+      "name": "smoke-statements-sqlbatch-queue",
+      "strategy": "MultipleInsertStatements",
+      "sqlExecution": "SqlBatch",
+      "rowCount": 2000,
+      "workerInstances": 1,
+      "writersPerInstance": 4,
+      "batchSize": 100,
+      "channelCapacity": 2000,
+      "rabbitMqPrefetch": 400,
+      "sqlBatchMaximumCommands": 4,
+      "sqlBatchMaximumDelayMilliseconds": 1
+    },
+    {
+      "name": "smoke-values-sqlbatch-queue",
+      "strategy": "MultiRowValues",
+      "sqlExecution": "SqlBatch",
+      "rowCount": 2000,
+      "workerInstances": 1,
+      "writersPerInstance": 4,
+      "batchSize": 100,
+      "channelCapacity": 2000,
+      "rabbitMqPrefetch": 400,
+      "sqlBatchMaximumCommands": 4,
+      "sqlBatchMaximumDelayMilliseconds": 1
+    },
+    {
       "name": "smoke-individual-direct",
       "mode": "DirectDatabase",
       "strategy": "Individual",
@@ -101,6 +168,32 @@
       "strategy": "BulkCopy",
       "rowCount": 2000,
       "batchSize": 500
+    },
+    {
+      "name": "smoke-individual-sqlbatch-direct",
+      "mode": "DirectDatabase",
+      "strategy": "Individual",
+      "batching": "None",
+      "sqlExecution": "SqlBatch",
+      "rowCount": 500,
+      "workerInstances": 1,
+      "writersPerInstance": 4,
+      "batchSize": 1,
+      "channelCapacity": 100,
+      "sqlBatchMaximumCommands": 4,
+      "sqlBatchMaximumDelayMilliseconds": 1
+    },
+    {
+      "name": "smoke-statements-sqlbatch-direct",
+      "mode": "DirectDatabase",
+      "strategy": "MultipleInsertStatements",
+      "sqlExecution": "SqlBatch",
+      "rowCount": 2000,
+      "workerInstances": 1,
+      "writersPerInstance": 4,
+      "batchSize": 100,
+      "sqlBatchMaximumCommands": 4,
+      "sqlBatchMaximumDelayMilliseconds": 1
     }
   ]
 }

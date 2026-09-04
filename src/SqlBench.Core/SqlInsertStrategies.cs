@@ -25,11 +25,13 @@ public readonly record struct SqlWriteTiming
     public required TimeSpan Transaction { get; init; }
 }
 
-public interface ISqlInsertStrategy
+public interface ISqlInsertStrategy : IAsyncDisposable
 {
     InsertStrategyKind Kind { get; }
 
     int MaximumBatchSize { get; }
+
+    SqlRequestMetricsSnapshot GetRequestMetrics();
 
     Task<SqlWriteTiming> InsertAsync(
         string connectionString,
@@ -40,19 +42,44 @@ public interface ISqlInsertStrategy
 
 public static class SqlInsertStrategyFactory
 {
-    public static ISqlInsertStrategy Create(InsertStrategyKind kind) => kind switch
+    public static ISqlInsertStrategy Create(
+        InsertStrategyKind kind,
+        SqlExecutionKind execution = SqlExecutionKind.Native,
+        int sqlBatchMaximumCommands = 1,
+        int sqlBatchMaximumDelayMilliseconds = 1,
+        int sqlBatchRequestConcurrency = 1)
     {
-        InsertStrategyKind.Individual => new IndividualInsertStrategy(),
-        InsertStrategyKind.TableValuedParameter => new TableValuedParameterInsertStrategy(),
-        InsertStrategyKind.MultipleInsertStatements => new MultipleStatementsInsertStrategy(),
-        InsertStrategyKind.MultiRowValues => new MultiRowValuesInsertStrategy(),
-        InsertStrategyKind.BulkCopy => new BulkCopyInsertStrategy(),
-        _ => throw new ArgumentOutOfRangeException(nameof(kind))
-    };
+        ISqlInsertStrategy strategy = kind switch
+        {
+            InsertStrategyKind.Individual => new IndividualInsertStrategy(),
+            InsertStrategyKind.TableValuedParameter => new TableValuedParameterInsertStrategy(),
+            InsertStrategyKind.MultipleInsertStatements => new MultipleStatementsInsertStrategy(),
+            InsertStrategyKind.MultiRowValues => new MultiRowValuesInsertStrategy(),
+            InsertStrategyKind.BulkCopy => new BulkCopyInsertStrategy(),
+            _ => throw new ArgumentOutOfRangeException(nameof(kind))
+        };
+
+        return execution switch
+        {
+            SqlExecutionKind.Native => strategy,
+            SqlExecutionKind.SqlBatch when strategy is ISqlBatchCommandBuilder builder =>
+                new SqlBatchCoalescingInsertStrategy(
+                    strategy,
+                    builder,
+                    sqlBatchMaximumCommands,
+                    TimeSpan.FromMilliseconds(sqlBatchMaximumDelayMilliseconds),
+                    sqlBatchRequestConcurrency),
+            SqlExecutionKind.SqlBatch => throw new ArgumentException(
+                $"The {kind} strategy cannot execute through SqlBatch.",
+                nameof(execution)),
+            _ => throw new ArgumentOutOfRangeException(nameof(execution))
+        };
+    }
 }
 
 internal abstract class SqlInsertStrategyBase : ISqlInsertStrategy
 {
+    private const string SqlBatchCommittedParameter = "@sqlbenchCommitted";
     private static readonly string[][] ParameterNames = Enumerable.Range(0, SqlLimits.MaximumRowsPerParameterizedCommand)
         .Select(static index => new[]
         {
@@ -74,10 +101,15 @@ internal abstract class SqlInsertStrategyBase : ISqlInsertStrategy
     private static readonly string[] RowParameterLists = ParameterNames
         .Select(static names => $"({string.Join(',', names)})")
         .ToArray();
+    private readonly SqlRequestMetrics _requestMetrics = new(1);
 
     public abstract InsertStrategyKind Kind { get; }
 
     public virtual int MaximumBatchSize => 5_000;
+
+    public SqlRequestMetricsSnapshot GetRequestMetrics() => _requestMetrics.Snapshot();
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     public async Task<SqlWriteTiming> InsertAsync(
         string connectionString,
@@ -100,8 +132,19 @@ internal abstract class SqlInsertStrategyBase : ISqlInsertStrategy
         try
         {
             long executionStart = Stopwatch.GetTimestamp();
-            await ExecuteAsync(connection, transaction, rows, options, cancellationToken).ConfigureAwait(false);
-            TimeSpan execution = Stopwatch.GetElapsedTime(executionStart);
+            TimeSpan execution;
+            _requestMetrics.RequestStarted(Kind, SqlExecutionKind.Native);
+            try
+            {
+                await ExecuteAsync(connection, transaction, rows, options, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                execution = Stopwatch.GetElapsedTime(executionStart);
+                _requestMetrics.RequestCompleted(Kind, SqlExecutionKind.Native);
+                _requestMetrics.Record(1, execution, TimeSpan.Zero, Kind, SqlExecutionKind.Native);
+            }
+
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return new SqlWriteTiming
             {
@@ -123,27 +166,57 @@ internal abstract class SqlInsertStrategyBase : ISqlInsertStrategy
         SqlInsertOptions options,
         CancellationToken cancellationToken);
 
-    protected static void AddRowParameters(SqlCommand command, BenchmarkMessage row, int index)
+    protected static void AddRowParameters(SqlCommand command, BenchmarkMessage row, int index) =>
+        AddRowParameters(command.Parameters, row, index);
+
+    protected static void AddRowParameters(SqlParameterCollection parameters, BenchmarkMessage row, int index)
     {
         string[] names = ParameterNames[index];
-        Add(command, names[0], SqlDbType.UniqueIdentifier, row.MessageId);
-        Add(command, names[1], SqlDbType.Int, row.ParentId);
-        Add(command, names[2], SqlDbType.UniqueIdentifier, row.CorrelationId);
-        Add(command, names[3], SqlDbType.DateTime2, row.OccurredAt).Scale = 3;
-        Add(command, names[4], SqlDbType.Int, row.SequenceNo);
-        Add(command, names[5], SqlDbType.BigInt, row.CounterValue);
-        Add(command, names[6], SqlDbType.SmallInt, row.Priority);
-        SqlParameter amount = Add(command, names[7], SqlDbType.Decimal, row.Amount);
+        Add(parameters, names[0], SqlDbType.UniqueIdentifier, row.MessageId);
+        Add(parameters, names[1], SqlDbType.Int, row.ParentId);
+        Add(parameters, names[2], SqlDbType.UniqueIdentifier, row.CorrelationId);
+        Add(parameters, names[3], SqlDbType.DateTime2, row.OccurredAt).Scale = 3;
+        Add(parameters, names[4], SqlDbType.Int, row.SequenceNo);
+        Add(parameters, names[5], SqlDbType.BigInt, row.CounterValue);
+        Add(parameters, names[6], SqlDbType.SmallInt, row.Priority);
+        SqlParameter amount = Add(parameters, names[7], SqlDbType.Decimal, row.Amount);
         amount.Precision = 18;
         amount.Scale = 4;
-        Add(command, names[8], SqlDbType.Bit, row.IsActive);
-        Add(command, names[9], SqlDbType.VarChar, row.Code).Size = 32;
-        Add(command, names[10], SqlDbType.NVarChar, row.Description).Size = 128;
-        Add(command, names[11], SqlDbType.Binary, row.PayloadHash).Size = 16;
-        Add(command, names[12], SqlDbType.NVarChar, row.OptionalNote).Size = 64;
+        Add(parameters, names[8], SqlDbType.Bit, row.IsActive);
+        Add(parameters, names[9], SqlDbType.VarChar, row.Code).Size = 32;
+        Add(parameters, names[10], SqlDbType.NVarChar, row.Description).Size = 128;
+        Add(parameters, names[11], SqlDbType.Binary, row.PayloadHash).Size = 16;
+        Add(parameters, names[12], SqlDbType.NVarChar, row.OptionalNote).Size = 64;
     }
 
     protected static string RowParameterList(int index) => RowParameterLists[index];
+
+    protected static SqlBatchCommand CreateTransactionalBatchCommand(string commandText)
+    {
+        var command = new SqlBatchCommand($$"""
+            SET XACT_ABORT ON;
+            SET {{SqlBatchCommittedParameter}} = 0;
+            BEGIN TRY
+                BEGIN TRANSACTION;
+                {{commandText}}
+                COMMIT TRANSACTION;
+                SET {{SqlBatchCommittedParameter}} = 1;
+            END TRY
+            BEGIN CATCH
+                IF XACT_STATE() <> 0 ROLLBACK TRANSACTION;
+                THROW;
+            END CATCH;
+            """);
+        command.Parameters.Add(new SqlParameter(SqlBatchCommittedParameter, SqlDbType.Bit)
+        {
+            Direction = ParameterDirection.InputOutput,
+            Value = false
+        });
+        return command;
+    }
+
+    internal static bool BatchCommandCommitted(SqlBatchCommand command) =>
+        command.Parameters[SqlBatchCommittedParameter].Value is true;
 
     protected const string InsertPrefix = """
         INSERT dbo.BenchmarkTarget
@@ -151,18 +224,18 @@ internal abstract class SqlInsertStrategyBase : ISqlInsertStrategy
         VALUES
         """;
 
-    private static SqlParameter Add(SqlCommand command, string name, SqlDbType type, object? value)
+    private static SqlParameter Add(SqlParameterCollection parameters, string name, SqlDbType type, object? value)
     {
         var parameter = new SqlParameter(name, type)
         {
             Value = value ?? DBNull.Value
         };
-        command.Parameters.Add(parameter);
+        parameters.Add(parameter);
         return parameter;
     }
 }
 
-internal sealed class IndividualInsertStrategy : SqlInsertStrategyBase
+internal sealed class IndividualInsertStrategy : SqlInsertStrategyBase, ISqlBatchCommandBuilder
 {
     public override InsertStrategyKind Kind => InsertStrategyKind.Individual;
 
@@ -182,9 +255,19 @@ internal sealed class IndividualInsertStrategy : SqlInsertStrategyBase
         AddRowParameters(command, rows[0], 0);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    public SqlBatchCommand CreateBatchCommand(
+        IReadOnlyList<BenchmarkMessage> rows,
+        SqlInsertOptions options)
+    {
+        _ = options;
+        SqlBatchCommand command = CreateTransactionalBatchCommand(InsertPrefix + RowParameterList(0) + ";");
+        AddRowParameters(command.Parameters, rows[0], 0);
+        return command;
+    }
 }
 
-internal sealed class MultipleStatementsInsertStrategy : SqlInsertStrategyBase
+internal sealed class MultipleStatementsInsertStrategy : SqlInsertStrategyBase, ISqlBatchCommandBuilder
 {
     private static readonly ConcurrentDictionary<int, string> CommandTexts = new();
 
@@ -202,16 +285,7 @@ internal sealed class MultipleStatementsInsertStrategy : SqlInsertStrategyBase
         await using SqlCommand command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandTimeout = options.CommandTimeoutSeconds;
-        command.CommandText = CommandTexts.GetOrAdd(rows.Count, static count =>
-        {
-            var sql = new StringBuilder(count * 360);
-            for (int index = 0; index < count; index++)
-            {
-                sql.Append(InsertPrefix).Append(RowParameterList(index)).AppendLine(";");
-            }
-
-            return sql.ToString();
-        });
+        command.CommandText = GetCommandText(rows.Count);
         for (int index = 0; index < rows.Count; index++)
         {
             AddRowParameters(command, rows[index], index);
@@ -219,9 +293,34 @@ internal sealed class MultipleStatementsInsertStrategy : SqlInsertStrategyBase
 
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    public SqlBatchCommand CreateBatchCommand(
+        IReadOnlyList<BenchmarkMessage> rows,
+        SqlInsertOptions options)
+    {
+        _ = options;
+        SqlBatchCommand command = CreateTransactionalBatchCommand(GetCommandText(rows.Count));
+        for (int index = 0; index < rows.Count; index++)
+        {
+            AddRowParameters(command.Parameters, rows[index], index);
+        }
+
+        return command;
+    }
+
+    private static string GetCommandText(int rowCount) => CommandTexts.GetOrAdd(rowCount, static count =>
+    {
+        var sql = new StringBuilder(count * 360);
+        for (int index = 0; index < count; index++)
+        {
+            sql.Append(InsertPrefix).Append(RowParameterList(index)).AppendLine(";");
+        }
+
+        return sql.ToString();
+    });
 }
 
-internal sealed class MultiRowValuesInsertStrategy : SqlInsertStrategyBase
+internal sealed class MultiRowValuesInsertStrategy : SqlInsertStrategyBase, ISqlBatchCommandBuilder
 {
     private static readonly ConcurrentDictionary<int, string> CommandTexts = new();
 
@@ -239,21 +338,7 @@ internal sealed class MultiRowValuesInsertStrategy : SqlInsertStrategyBase
         await using SqlCommand command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandTimeout = options.CommandTimeoutSeconds;
-        command.CommandText = CommandTexts.GetOrAdd(rows.Count, static count =>
-        {
-            var sql = new StringBuilder(count * 210).Append(InsertPrefix);
-            for (int index = 0; index < count; index++)
-            {
-                if (index > 0)
-                {
-                    sql.Append(',');
-                }
-
-                sql.AppendLine().Append(RowParameterList(index));
-            }
-
-            return sql.Append(';').ToString();
-        });
+        command.CommandText = GetCommandText(rows.Count);
         for (int index = 0; index < rows.Count; index++)
         {
             AddRowParameters(command, rows[index], index);
@@ -261,9 +346,39 @@ internal sealed class MultiRowValuesInsertStrategy : SqlInsertStrategyBase
 
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    public SqlBatchCommand CreateBatchCommand(
+        IReadOnlyList<BenchmarkMessage> rows,
+        SqlInsertOptions options)
+    {
+        _ = options;
+        SqlBatchCommand command = CreateTransactionalBatchCommand(GetCommandText(rows.Count));
+        for (int index = 0; index < rows.Count; index++)
+        {
+            AddRowParameters(command.Parameters, rows[index], index);
+        }
+
+        return command;
+    }
+
+    private static string GetCommandText(int rowCount) => CommandTexts.GetOrAdd(rowCount, static count =>
+    {
+        var sql = new StringBuilder(count * 210).Append(InsertPrefix);
+        for (int index = 0; index < count; index++)
+        {
+            if (index > 0)
+            {
+                sql.Append(',');
+            }
+
+            sql.AppendLine().Append(RowParameterList(index));
+        }
+
+        return sql.Append(';').ToString();
+    });
 }
 
-internal sealed class TableValuedParameterInsertStrategy : SqlInsertStrategyBase
+internal sealed class TableValuedParameterInsertStrategy : SqlInsertStrategyBase, ISqlBatchCommandBuilder
 {
     private static readonly SqlMetaData[] Metadata =
     [
@@ -303,6 +418,20 @@ internal sealed class TableValuedParameterInsertStrategy : SqlInsertStrategyBase
         };
         command.Parameters.Add(parameter);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public SqlBatchCommand CreateBatchCommand(
+        IReadOnlyList<BenchmarkMessage> rows,
+        SqlInsertOptions options)
+    {
+        _ = options;
+        SqlBatchCommand command = CreateTransactionalBatchCommand("EXEC dbo.InsertBenchmarkRows @Rows;");
+        command.Parameters.Add(new SqlParameter("@Rows", SqlDbType.Structured)
+        {
+            TypeName = "dbo.BenchmarkRowType",
+            Value = StreamRecords(rows)
+        });
+        return command;
     }
 
     private static IEnumerable<SqlDataRecord> StreamRecords(IReadOnlyList<BenchmarkMessage> rows)

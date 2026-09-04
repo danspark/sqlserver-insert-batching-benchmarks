@@ -1,11 +1,12 @@
 [CmdletBinding()]
 param(
-  [ValidateSet("Smoke", "Full", "Confirmation")]
+  [ValidateSet("Smoke", "Full", "SqlBatch", "SqlBatchConfirmation", "Confirmation")]
   [string] $Profile = "Smoke",
   [string] $Scenario,
   [ValidateRange(1, 100000000)]
   [int] $Rows,
   [string] $OutputDirectory,
+  [switch] $UpdateReadme,
   [switch] $LeaveRunning,
   [switch] $UseRunningEnvironment
 )
@@ -14,10 +15,12 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $composeFile = Join-Path $repoRoot "compose.yaml"
 $profilePath = Join-Path $repoRoot "config/$Profile.json"
+$publishedResultsRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot "results/published"))
 $createdAllResources = $false
 $newContainerIds = @()
 $statisticsJob = $null
 $statisticsStopFile = $null
+$testedGitCommit = $null
 $previousLocation = Get-Location
 
 function Assert-Command([string] $Name) {
@@ -52,14 +55,56 @@ function New-BenchmarkSecret([string] $Prefix) {
 
 try {
   Set-Location $repoRoot
+
+  if ($UpdateReadme -and ($Scenario -or $PSBoundParameters.ContainsKey("Rows"))) {
+    throw "-UpdateReadme requires a complete profile. Do not combine it with -Scenario or -Rows."
+  }
+
+  if (-not $OutputDirectory) {
+    $stamp = [DateTimeOffset]::UtcNow.ToString("yyyyMMdd-HHmmss")
+    $resultRoot = if ($UpdateReadme) { $publishedResultsRoot } else { Join-Path $repoRoot "results/local" }
+    $OutputDirectory = Join-Path $resultRoot "$stamp-$($Profile.ToLowerInvariant())"
+  }
+  $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
+
+  if ($UpdateReadme) {
+    $publishedRelativePath = [IO.Path]::GetRelativePath($publishedResultsRoot, $OutputDirectory)
+    if ($publishedRelativePath -eq "." -or
+        [IO.Path]::IsPathRooted($publishedRelativePath) -or
+        $publishedRelativePath -eq ".." -or
+        $publishedRelativePath.StartsWith("../", [StringComparison]::Ordinal) -or
+        $publishedRelativePath.StartsWith("..\", [StringComparison]::Ordinal)) {
+      throw "-UpdateReadme requires -OutputDirectory to be a child of $publishedResultsRoot."
+    }
+  }
+
   Assert-Command "dotnet"
   Assert-Command "docker"
   Assert-Command "pwsh"
+  if ($UpdateReadme) { Assert-Command "git" }
   & docker compose version | Out-Null
   & docker info --format '{{.ServerVersion}}' | Out-Null
 
-  if ($Profile -eq "Full") {
-    & pwsh -NoLogo -NoProfile (Join-Path $PSScriptRoot "generate-full-profile.ps1")
+  $profileGenerator = switch ($Profile) {
+    "Full" { "generate-full-profile.ps1" }
+    "SqlBatch" { "generate-sqlbatch-profile.ps1" }
+    "SqlBatchConfirmation" { "generate-sqlbatch-confirmation-profile.ps1" }
+    default { $null }
+  }
+  if ($profileGenerator) {
+    & pwsh -NoLogo -NoProfile (Join-Path $PSScriptRoot $profileGenerator)
+  }
+
+  if ($UpdateReadme) {
+    $gitStatus = @(& git status --porcelain)
+    if ($LASTEXITCODE -ne 0) { throw "Could not inspect Git status before publication." }
+    if ($gitStatus.Count -ne 0) {
+      throw "-UpdateReadme requires a clean Git working tree before the measured run."
+    }
+    $testedGitCommit = (& git rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $testedGitCommit -notmatch '^[0-9a-fA-F]{40}$') {
+      throw "Could not resolve the tested Git commit before publication."
+    }
   }
 
   Write-Host "Building the complete solution..."
@@ -101,11 +146,6 @@ try {
   & dotnet test (Join-Path $repoRoot "SqlServerInsertBatchingBenchmarks.slnx") -c Release --no-build
   if ($LASTEXITCODE -ne 0) { throw "Tests failed." }
 
-  if (-not $OutputDirectory) {
-    $stamp = [DateTimeOffset]::UtcNow.ToString("yyyyMMdd-HHmmss")
-    $OutputDirectory = Join-Path $repoRoot "results/local/$stamp-$($Profile.ToLowerInvariant())"
-  }
-  $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
   New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 
   $environment = [ordered]@{
@@ -150,6 +190,7 @@ try {
   $controllerArguments = @($controller, "--profile", $profilePath, "--output", $OutputDirectory, "--worker", $worker)
   if ($Scenario) { $controllerArguments += @("--scenario", $Scenario) }
   if ($PSBoundParameters.ContainsKey("Rows")) { $controllerArguments += @("--rows", $Rows.ToString()) }
+  if ($testedGitCommit) { $controllerArguments += @("--git-commit", $testedGitCommit) }
   & dotnet @controllerArguments
   $controllerExit = $LASTEXITCODE
 
@@ -168,8 +209,26 @@ try {
   $resultFiles = @(Get-ChildItem -Path $OutputDirectory -Filter "*.json" -File |
     Where-Object { $_.Name -notin @("environment.json", "manifest.json") })
   if ($resultFiles.Count -gt 0) {
+    if ($UpdateReadme) {
+      $reportReadme = Join-Path $repoRoot "README.md"
+      $reportCharts = Join-Path $repoRoot "docs/charts"
+      $reportResults = $publishedResultsRoot
+      $publishedJson = Get-ChildItem -Path $publishedResultsRoot -Filter "*.json" -File -Recurse |
+        Where-Object { $_.Name -notin @("environment.json", "manifest.json") }
+      foreach ($publishedFile in $publishedJson) {
+        $publishedCommit = (Get-Content -LiteralPath $publishedFile.FullName -Raw | ConvertFrom-Json).gitCommit
+        if ($publishedCommit -notmatch '^[0-9a-fA-F]{40}$') {
+          throw "Canonical publication rejected non-clean provenance in $($publishedFile.FullName)."
+        }
+      }
+    } else {
+      $reportReadme = Join-Path $OutputDirectory "README.md"
+      $reportCharts = Join-Path $OutputDirectory "docs/charts"
+      $reportResults = $OutputDirectory
+      Copy-Item -LiteralPath (Join-Path $repoRoot "README.md") -Destination $reportReadme
+    }
     & dotnet run --project (Join-Path $repoRoot "src/SqlBench.Report/SqlBench.Report.csproj") -c Release --no-build -- `
-      --results $OutputDirectory --readme (Join-Path $repoRoot "README.md") --charts (Join-Path $repoRoot "docs/charts")
+      --results $reportResults --readme $reportReadme --charts $reportCharts
     $reportExit = $LASTEXITCODE
   } else {
     $reportExit = 1

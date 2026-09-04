@@ -14,6 +14,7 @@ function Add-Scenario {
     [string] $Mode = "Queue",
     [string] $Strategy = "BulkCopy",
     [string] $Batching = "Channel",
+    [string] $SqlExecution = "Native",
     [string] $Distribution = "Uniform",
     [int] $Rows = 10000,
     [int] $Workers = 1,
@@ -22,6 +23,9 @@ function Add-Scenario {
     [int] $DelayMs = 5,
     [int] $Capacity = 4000,
     [int] $Prefetch = 1000,
+    [int] $SqlBatchCommands = 1,
+    [int] $SqlBatchDelayMs = 1,
+    [int] $SqlBatchRequests = 1,
     [int] $Repetition = 1
   )
 
@@ -31,6 +35,7 @@ function Add-Scenario {
     mode = $Mode
     strategy = $Strategy
     batching = $Batching
+    sqlExecution = $SqlExecution
     distribution = $Distribution
     seed = $seed
     rowCount = $Rows
@@ -40,6 +45,9 @@ function Add-Scenario {
     maximumBatchingDelayMilliseconds = $DelayMs
     channelCapacity = $Capacity
     rabbitMqPrefetch = $Prefetch
+    sqlBatchMaximumCommands = $SqlBatchCommands
+    sqlBatchMaximumDelayMilliseconds = $SqlBatchDelayMs
+    sqlBatchRequestConcurrency = $SqlBatchRequests
     repetition = $Repetition
   })
 }
@@ -99,6 +107,47 @@ foreach ($batching in @("Channel", "LockSwap")) {
 
 foreach ($writers in @(1, 2, 4, 8)) {
   Add-Scenario -Name "refine-bulk-writers-$writers" -Stage "refine-concurrency" -Writers $writers
+}
+
+$sqlBatchSettings = [ordered]@{
+  Individual = @{ Batch = 1; Batching = "None"; Capacity = 1000; Prefetch = 250 }
+  TableValuedParameter = @{ Batch = 500; Batching = "Channel"; Capacity = 4000; Prefetch = 2000 }
+  MultipleInsertStatements = @{ Batch = 50; Batching = "Channel"; Capacity = 2000; Prefetch = 400 }
+  MultiRowValues = @{ Batch = 100; Batching = "Channel"; Capacity = 2000; Prefetch = 800 }
+}
+
+foreach ($entry in $sqlBatchSettings.GetEnumerator()) {
+  $setting = $entry.Value
+  Add-Scenario -Name "sqlbatch-$($entry.Key.ToLowerInvariant())-single-command" -Stage "sqlbatch-control" `
+    -Strategy $entry.Key -Batching $setting.Batching -SqlExecution "SqlBatch" -Writers 1 `
+    -BatchSize $setting.Batch -Capacity $setting.Capacity -Prefetch $setting.Prefetch `
+    -SqlBatchCommands 1
+
+  foreach ($writers in @(2, 4, 8)) {
+    Add-Scenario -Name "sqlbatch-$($entry.Key.ToLowerInvariant())-writers-$writers" -Stage "sqlbatch-writers" `
+      -Strategy $entry.Key -Batching $setting.Batching -SqlExecution "SqlBatch" -Writers $writers `
+      -BatchSize $setting.Batch -Capacity $setting.Capacity -Prefetch $setting.Prefetch `
+      -SqlBatchCommands $writers
+  }
+
+  foreach ($commands in @(1, 2, 4, 8)) {
+    Add-Scenario -Name "sqlbatch-$($entry.Key.ToLowerInvariant())-commands-$commands" -Stage "sqlbatch-commands" `
+      -Strategy $entry.Key -Batching $setting.Batching -SqlExecution "SqlBatch" -Writers 8 `
+      -BatchSize $setting.Batch -Capacity $setting.Capacity -Prefetch $setting.Prefetch `
+      -SqlBatchCommands $commands
+  }
+
+  Add-Scenario -Name "direct-sqlbatch-$($entry.Key.ToLowerInvariant())" -Stage "direct-control" `
+    -Mode "DirectDatabase" -Strategy $entry.Key -Batching $setting.Batching -SqlExecution "SqlBatch" `
+    -Writers 8 -BatchSize $setting.Batch -Capacity $setting.Capacity -Prefetch $setting.Prefetch `
+    -SqlBatchCommands 8
+
+}
+
+foreach ($delay in @(1, 5, 20)) {
+  Add-Scenario -Name "sqlbatch-individual-delay-$delay" -Stage "sqlbatch-delay" `
+    -Strategy "Individual" -Batching "None" -SqlExecution "SqlBatch" -Writers 4 `
+    -BatchSize 1 -Capacity 1000 -Prefetch 250 -SqlBatchCommands 4 -SqlBatchDelayMs $delay
 }
 
 foreach ($entry in $strategySettings.GetEnumerator()) {

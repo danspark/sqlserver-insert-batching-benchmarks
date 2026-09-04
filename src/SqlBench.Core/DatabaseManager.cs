@@ -216,7 +216,8 @@ public sealed partial class DatabaseManager(string connectionString)
     {
         var builder = new SqlConnectionStringBuilder(_connectionString)
         {
-            InitialCatalog = DatabaseName
+            InitialCatalog = DatabaseName,
+            Enlist = false
         };
         return builder.ConnectionString;
     }

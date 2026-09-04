@@ -52,7 +52,18 @@ public static class WorkerRunner
             builder.AddSqlBenchServiceDefaults();
             builder.Services.AddOpenTelemetry().ConfigureResource(resource => resource.AddService(
                 serviceName: "sqlbench-worker",
-                serviceInstanceId: $"worker-{config.WorkerId}"));
+                serviceInstanceId: $"worker-{config.WorkerId}")
+                .AddAttributes([
+                    new KeyValuePair<string, object>("sqlbench.scenario", config.Scenario.Name),
+                    new KeyValuePair<string, object>("sqlbench.strategy", config.Scenario.Strategy.ToString()),
+                    new KeyValuePair<string, object>("sqlbench.execution", config.Scenario.SqlExecution.ToString()),
+                    new KeyValuePair<string, object>(
+                        "sqlbench.sqlbatch.maximum_commands",
+                        config.Scenario.SqlBatchMaximumCommands),
+                    new KeyValuePair<string, object>(
+                        "sqlbench.sqlbatch.request_concurrency",
+                        config.Scenario.SqlBatchRequestConcurrency)
+                ]));
             telemetryHost = builder.Build();
             await telemetryHost.StartAsync().ConfigureAwait(false);
         }
@@ -82,7 +93,7 @@ public static class WorkerRunner
         var errors = new ConcurrentBag<string>();
         var deliveryToCommit = new FixedConcurrentBuffer<long>(config.Scenario.RowCount);
         var deliveryToAck = new FixedConcurrentBuffer<long>(config.Scenario.RowCount);
-        var handler = new WorkerBatchHandler(
+        await using var handler = new WorkerBatchHandler(
             config.Scenario,
             new DatabaseManager(config.Runtime.SqlConnectionString).GetTargetConnectionString(),
             sqlExecution,
@@ -229,6 +240,7 @@ public static class WorkerRunner
             }
 
             await batcher.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            await handler.DisposeAsync().ConfigureAwait(false);
             await WaitForCommitContinuationsAsync(counters).ConfigureAwait(false);
             foreach (ConsumerRegistration registration in consumers)
             {
@@ -257,6 +269,7 @@ public static class WorkerRunner
             DeliveryToAcknowledgmentMicroseconds = deliveryToAck.ToArray(),
             SqlExecutionMilliseconds = sqlExecution.ToArray(),
             TransactionMilliseconds = transaction.ToArray(),
+            SqlRequests = handler.GetSqlRequestMetrics(),
             BatcherMetrics = batcher.GetMetrics(),
             Process = new ProcessMetrics
             {

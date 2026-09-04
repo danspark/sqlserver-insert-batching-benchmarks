@@ -71,9 +71,29 @@ public sealed record WorkerRunResult
     public required long[] DeliveryToAcknowledgmentMicroseconds { get; init; }
     public required double[] SqlExecutionMilliseconds { get; init; }
     public required double[] TransactionMilliseconds { get; init; }
+    public SqlRequestMetricsSnapshot SqlRequests { get; init; } = new();
     public required SqlBench.Batching.BatcherMetricsSnapshot BatcherMetrics { get; init; }
     public required ProcessMetrics Process { get; init; }
     public required IReadOnlyList<string> Errors { get; init; }
+}
+
+public sealed record SqlRequestMetricsSnapshot
+{
+    public long RequestCount { get; init; }
+    public long CommandCount { get; init; }
+    public long SingleCommandRequestCount { get; init; }
+    public long ActiveRequests { get; init; }
+    public long MaximumConcurrentRequests { get; init; }
+    public long CurrentCoordinatorQueueDepth { get; init; }
+    public long MaximumCoordinatorQueueDepth { get; init; }
+    public long CoordinatorBackpressureEvents { get; init; }
+    public double MeanCommandsPerRequest { get; init; }
+    public int P50CommandsPerRequest { get; init; }
+    public int P95CommandsPerRequest { get; init; }
+    public int P99CommandsPerRequest { get; init; }
+    public int MaximumCommandsPerRequest { get; init; }
+    public long[] CommandsPerRequestCounts { get; init; } = [];
+    public PercentileSummary CoordinatorQueueWaitMilliseconds { get; init; } = new();
 }
 
 public sealed record ProcessMetrics
