@@ -120,7 +120,7 @@ foreach ($entry in $strategySettings.GetEnumerator()) {
 foreach ($entry in $strategySettings.GetEnumerator()) {
   $setting = $entry.Value
   foreach ($repetition in 1..3) {
-    Add-Scenario -Name "finalist-$($entry.Key.ToLowerInvariant())" -Stage "finalist" -Rows 100000 `
+    Add-Scenario -Name "finalist-$($entry.Key.ToLowerInvariant())" -Stage "finalist" -Rows 250000 `
       -Strategy $entry.Key -Batching $setting.Batching -Workers 1 -Writers $setting.Writers `
       -BatchSize $setting.Batch -Capacity $setting.Capacity -Prefetch $setting.Prefetch -Repetition $repetition
   }
