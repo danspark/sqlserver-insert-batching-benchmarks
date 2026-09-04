@@ -1,0 +1,22 @@
+{
+  "profile": "Confirmation",
+  "gitCommit": "c6d34691c004ad6967c5e372b77d820e57b3dd0f",
+  "generatedAt": "2026-09-04T17:59:43.2821414+00:00",
+  "files": [
+    "confirmed-multi-row-values-r3.json",
+    "confirmed-table-valued-parameter-r1.json",
+    "confirmed-multi-row-values-r2.json",
+    "confirmed-individual-r1.json",
+    "confirmed-individual-r2.json",
+    "confirmed-individual-r3.json",
+    "confirmed-bulk-copy-r1.json",
+    "confirmed-bulk-copy-r2.json",
+    "confirmed-multiple-statements-r3.json",
+    "confirmed-table-valued-parameter-r3.json",
+    "confirmed-table-valued-parameter-r2.json",
+    "confirmed-multiple-statements-r1.json",
+    "confirmed-bulk-copy-r3.json",
+    "confirmed-multi-row-values-r1.json",
+    "confirmed-multiple-statements-r2.json"
+  ]
+}

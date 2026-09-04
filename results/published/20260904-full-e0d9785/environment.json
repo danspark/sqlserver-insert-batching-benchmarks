@@ -1,0 +1,22 @@
+{
+  "recordedAt": "2026-09-04T16:53:57.8824713+00:00",
+  "operatingSystem": "CachyOS",
+  "architecture": "X64",
+  "processorCount": 24,
+  "dotnetSdk": "10.0.400",
+  "powerShell": "7.6.5",
+  "docker": "29.7.2",
+  "dockerCompose": "5.5.0",
+  "aspire": "13.5.3+b5f143315ffb6968ea939a9978797a5b20e4c688",
+  "sqlServerLimit": {
+    "cpus": 4,
+    "memoryBytes": 4294967296
+  },
+  "rabbitMqLimit": {
+    "cpus": 2,
+    "memoryBytes": 1073741824
+  },
+  "profile": "Full",
+  "scenarioFilter": "",
+  "rowOverride": null
+}

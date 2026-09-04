@@ -1,0 +1,465 @@
+{
+  "scenarioName": "finalist-tablevaluedparameter",
+  "gitCommit": "e0d9785371713fd13ea2de2b3471eb7c806fad3e",
+  "timestamp": "2026-09-04T17:01:39.3085168+00:00",
+  "configuration": {
+    "name": "finalist-tablevaluedparameter",
+    "stage": "finalist",
+    "mode": "Queue",
+    "strategy": "TableValuedParameter",
+    "batching": "Channel",
+    "distribution": "Uniform",
+    "seed": 1592606758,
+    "rowCount": 250000,
+    "workerInstances": 1,
+    "writersPerInstance": 2,
+    "batchSize": 500,
+    "maximumBatchingDelayMilliseconds": 5,
+    "channelCapacity": 4000,
+    "rabbitMqPrefetch": 1000,
+    "commandTimeoutSeconds": 120,
+    "bulkCopyTimeoutSeconds": 120,
+    "bulkCopyTableLock": true,
+    "bulkCopyEnableStreaming": true,
+    "repetition": 2,
+    "warmup": false
+  },
+  "serializedMessageBytes": 430,
+  "approximateDatabaseRowBytes": 390,
+  "durationSeconds": 26.0893217,
+  "deliveredMessages": 250000,
+  "committedRows": 250000,
+  "acknowledgedMessages": 250000,
+  "committedRowsPerSecond": 9582.464537588956,
+  "acknowledgedMessagesPerSecond": 9582.464537588956,
+  "deliveryToCommitMilliseconds": {
+    "count": 250000,
+    "minimum": 10.408,
+    "mean": 166.03213141999998,
+    "p50": 129.777,
+    "p95": 209.274,
+    "p99": 1200.454,
+    "maximum": 1718.991
+  },
+  "deliveryToAcknowledgmentMilliseconds": {
+    "count": 250000,
+    "minimum": 10.419,
+    "mean": 168.099648092,
+    "p50": 132.089,
+    "p95": 212.07,
+    "p99": 1206.552,
+    "maximum": 1719.211
+  },
+  "sqlExecutionMilliseconds": {
+    "count": 585,
+    "minimum": 1.3345,
+    "mean": 75.47137965811966,
+    "p50": 62.2806,
+    "p95": 104.1336,
+    "p99": 535.8224,
+    "maximum": 591.1845
+  },
+  "transactionMilliseconds": {
+    "count": 585,
+    "minimum": 6.2283,
+    "mean": 85.56355794871793,
+    "p50": 70.6079,
+    "p95": 116.8017,
+    "p99": 603.8965,
+    "maximum": 716.3352
+  },
+  "workers": [
+    {
+      "workerId": 1,
+      "deliveredMessages": 250000,
+      "committedRows": 250000,
+      "acknowledgedMessages": 250000,
+      "redeliveredMessages": 0,
+      "lastAcknowledgmentTimestamp": 230500736163892,
+      "stopwatchFrequency": 1000000000,
+      "deliveryToCommitMicroseconds": [],
+      "deliveryToAcknowledgmentMicroseconds": [],
+      "sqlExecutionMilliseconds": [],
+      "transactionMilliseconds": [],
+      "batcherMetrics": {
+        "currentQueueDepth": 0,
+        "completedItems": 250000,
+        "failedItems": 0,
+        "backpressureEvents": 0,
+        "channelWaitMilliseconds": {
+          "count": 250000,
+          "minimum": 0.0001,
+          "mean": 72.69121173640076,
+          "p50": 52.5018,
+          "p95": 104.2351,
+          "p99": 600.6662,
+          "maximum": 1180.0037
+        },
+        "actualBatchSize": {
+          "count": 585,
+          "minimum": 1,
+          "mean": 427.35042735042737,
+          "p50": 500,
+          "p95": 500,
+          "p99": 500,
+          "maximum": 500
+        },
+        "batchFillMilliseconds": {
+          "count": 585,
+          "minimum": 0.0601,
+          "mean": 0.996778461538462,
+          "p50": 0.112,
+          "p95": 4.4068,
+          "p99": 5.0216,
+          "maximum": 5.9386
+        },
+        "handlerMilliseconds": {
+          "count": 585,
+          "minimum": 6.2569,
+          "mean": 86.21843487179486,
+          "p50": 70.7186,
+          "p95": 116.8729,
+          "p99": 604.2257,
+          "maximum": 904.9393
+        }
+      },
+      "process": {
+        "cpuSeconds": 91.153898,
+        "peakWorkingSetBytes": 164175872,
+        "allocatedBytes": 738226256,
+        "generation0Collections": 57,
+        "generation1Collections": 37,
+        "generation2Collections": 12
+      },
+      "errors": []
+    }
+  ],
+  "sqlServerBefore": {
+    "physicalMemoryKilobytes": 4194304,
+    "physicalMemoryLow": false,
+    "virtualMemoryLow": false,
+    "processKernelTimeMilliseconds": 38281,
+    "processUserTimeMilliseconds": 197482,
+    "bytesRead": 4595712,
+    "bytesWritten": 2543386624,
+    "readStallMilliseconds": 8,
+    "writeStallMilliseconds": 22414,
+    "totalLogBytes": 536862719,
+    "usedLogBytes": 143896575,
+    "logSinceBackupMegabytes": 0,
+    "logTruncationHoldupReason": "NOTHING",
+    "waits": [
+      {
+        "waitType": "SOS_WORK_DISPATCHER",
+        "waitingTasks": 254626,
+        "waitTimeMilliseconds": 23933786,
+        "signalWaitTimeMilliseconds": 17960
+      },
+      {
+        "waitType": "PREEMPTIVE_OS_FLUSHFILEBUFFERS",
+        "waitingTasks": 89980,
+        "waitTimeMilliseconds": 664968,
+        "signalWaitTimeMilliseconds": 0
+      },
+      {
+        "waitType": "SQLTRACE_INCREMENTAL_FLUSH_SLEEP",
+        "waitingTasks": 113,
+        "waitTimeMilliseconds": 448016,
+        "signalWaitTimeMilliseconds": 0
+      },
+      {
+        "waitType": "QDS_PERSIST_TASK_MAIN_LOOP_SLEEP",
+        "waitingTasks": 8,
+        "waitTimeMilliseconds": 420005,
+        "signalWaitTimeMilliseconds": 0
+      },
+      {
+        "waitType": "PWAIT_EXTENSIBILITY_CLEANUP_TASK",
+        "waitingTasks": 3,
+        "waitTimeMilliseconds": 360000,
+        "signalWaitTimeMilliseconds": 360000
+      },
+      {
+        "waitType": "BROKER_TO_FLUSH",
+        "waitingTasks": 221,
+        "waitTimeMilliseconds": 226361,
+        "signalWaitTimeMilliseconds": 2
+      },
+      {
+        "waitType": "AZURE_IMDS_VERSIONS",
+        "waitingTasks": 1,
+        "waitTimeMilliseconds": 60158,
+        "signalWaitTimeMilliseconds": 0
+      },
+      {
+        "waitType": "LCK_M_X",
+        "waitingTasks": 1866,
+        "waitTimeMilliseconds": 37478,
+        "signalWaitTimeMilliseconds": 111
+      },
+      {
+        "waitType": "WRITELOG",
+        "waitingTasks": 85726,
+        "waitTimeMilliseconds": 32594,
+        "signalWaitTimeMilliseconds": 4178
+      },
+      {
+        "waitType": "PAGELATCH_EX",
+        "waitingTasks": 92701,
+        "waitTimeMilliseconds": 31467,
+        "signalWaitTimeMilliseconds": 3318
+      },
+      {
+        "waitType": "LCK_M_IX",
+        "waitingTasks": 1135,
+        "waitTimeMilliseconds": 30793,
+        "signalWaitTimeMilliseconds": 94
+      },
+      {
+        "waitType": "PREEMPTIVE_OS_CRYPTOPS",
+        "waitingTasks": 1349,
+        "waitTimeMilliseconds": 27114,
+        "signalWaitTimeMilliseconds": 0
+      },
+      {
+        "waitType": "LATCH_SH",
+        "waitingTasks": 17576,
+        "waitTimeMilliseconds": 25767,
+        "signalWaitTimeMilliseconds": 1533
+      },
+      {
+        "waitType": "LATCH_EX",
+        "waitingTasks": 9816,
+        "waitTimeMilliseconds": 15117,
+        "signalWaitTimeMilliseconds": 705
+      },
+      {
+        "waitType": "STARTUP_DEPENDENCY_MANAGER",
+        "waitingTasks": 66,
+        "waitTimeMilliseconds": 6163,
+        "signalWaitTimeMilliseconds": 1
+      },
+      {
+        "waitType": "ASYNC_NETWORK_IO",
+        "waitingTasks": 10649,
+        "waitTimeMilliseconds": 5184,
+        "signalWaitTimeMilliseconds": 725
+      },
+      {
+        "waitType": "PWAIT_ALL_COMPONENTS_INITIALIZED",
+        "waitingTasks": 5,
+        "waitTimeMilliseconds": 5130,
+        "signalWaitTimeMilliseconds": 1
+      },
+      {
+        "waitType": "WAIT_ON_SYNC_STATISTICS_REFRESH",
+        "waitingTasks": 232,
+        "waitTimeMilliseconds": 4316,
+        "signalWaitTimeMilliseconds": 0
+      },
+      {
+        "waitType": "MEMORY_ALLOCATION_EXT",
+        "waitingTasks": 895763,
+        "waitTimeMilliseconds": 2974,
+        "signalWaitTimeMilliseconds": 0
+      },
+      {
+        "waitType": "SLEEP_MASTERDBREADY",
+        "waitingTasks": 2,
+        "waitTimeMilliseconds": 2840,
+        "signalWaitTimeMilliseconds": 0
+      }
+    ]
+  },
+  "sqlServerAfter": {
+    "physicalMemoryKilobytes": 4194304,
+    "physicalMemoryLow": false,
+    "virtualMemoryLow": false,
+    "processKernelTimeMilliseconds": 40395,
+    "processUserTimeMilliseconds": 214540,
+    "bytesRead": 4595712,
+    "bytesWritten": 2885373952,
+    "readStallMilliseconds": 8,
+    "writeStallMilliseconds": 24077,
+    "totalLogBytes": 536862719,
+    "usedLogBytes": 238391295,
+    "logSinceBackupMegabytes": 0,
+    "logTruncationHoldupReason": "NOTHING",
+    "waits": [
+      {
+        "waitType": "SOS_WORK_DISPATCHER",
+        "waitingTasks": 256718,
+        "waitTimeMilliseconds": 25664496,
+        "signalWaitTimeMilliseconds": 18205
+      },
+      {
+        "waitType": "PREEMPTIVE_OS_FLUSHFILEBUFFERS",
+        "waitingTasks": 92328,
+        "waitTimeMilliseconds": 681380,
+        "signalWaitTimeMilliseconds": 0
+      },
+      {
+        "waitType": "SQLTRACE_INCREMENTAL_FLUSH_SLEEP",
+        "waitingTasks": 121,
+        "waitTimeMilliseconds": 480017,
+        "signalWaitTimeMilliseconds": 0
+      },
+      {
+        "waitType": "QDS_PERSIST_TASK_MAIN_LOOP_SLEEP",
+        "waitingTasks": 9,
+        "waitTimeMilliseconds": 480005,
+        "signalWaitTimeMilliseconds": 0
+      },
+      {
+        "waitType": "PWAIT_EXTENSIBILITY_CLEANUP_TASK",
+        "waitingTasks": 3,
+        "waitTimeMilliseconds": 360000,
+        "signalWaitTimeMilliseconds": 360000
+      },
+      {
+        "waitType": "BROKER_TO_FLUSH",
+        "waitingTasks": 236,
+        "waitTimeMilliseconds": 241724,
+        "signalWaitTimeMilliseconds": 2
+      },
+      {
+        "waitType": "AZURE_IMDS_VERSIONS",
+        "waitingTasks": 1,
+        "waitTimeMilliseconds": 60158,
+        "signalWaitTimeMilliseconds": 0
+      },
+      {
+        "waitType": "LCK_M_IX",
+        "waitingTasks": 1684,
+        "waitTimeMilliseconds": 47156,
+        "signalWaitTimeMilliseconds": 143
+      },
+      {
+        "waitType": "LCK_M_X",
+        "waitingTasks": 1866,
+        "waitTimeMilliseconds": 37478,
+        "signalWaitTimeMilliseconds": 111
+      },
+      {
+        "waitType": "WRITELOG",
+        "waitingTasks": 86858,
+        "waitTimeMilliseconds": 33319,
+        "signalWaitTimeMilliseconds": 4241
+      },
+      {
+        "waitType": "PAGELATCH_EX",
+        "waitingTasks": 93382,
+        "waitTimeMilliseconds": 31795,
+        "signalWaitTimeMilliseconds": 3373
+      },
+      {
+        "waitType": "PREEMPTIVE_OS_CRYPTOPS",
+        "waitingTasks": 1373,
+        "waitTimeMilliseconds": 27486,
+        "signalWaitTimeMilliseconds": 0
+      },
+      {
+        "waitType": "LATCH_SH",
+        "waitingTasks": 17578,
+        "waitTimeMilliseconds": 25767,
+        "signalWaitTimeMilliseconds": 1533
+      },
+      {
+        "waitType": "LATCH_EX",
+        "waitingTasks": 9817,
+        "waitTimeMilliseconds": 15129,
+        "signalWaitTimeMilliseconds": 706
+      },
+      {
+        "waitType": "STARTUP_DEPENDENCY_MANAGER",
+        "waitingTasks": 66,
+        "waitTimeMilliseconds": 6163,
+        "signalWaitTimeMilliseconds": 1
+      },
+      {
+        "waitType": "ASYNC_NETWORK_IO",
+        "waitingTasks": 10880,
+        "waitTimeMilliseconds": 5328,
+        "signalWaitTimeMilliseconds": 751
+      },
+      {
+        "waitType": "PWAIT_ALL_COMPONENTS_INITIALIZED",
+        "waitingTasks": 5,
+        "waitTimeMilliseconds": 5130,
+        "signalWaitTimeMilliseconds": 1
+      },
+      {
+        "waitType": "WAIT_ON_SYNC_STATISTICS_REFRESH",
+        "waitingTasks": 235,
+        "waitTimeMilliseconds": 4401,
+        "signalWaitTimeMilliseconds": 0
+      },
+      {
+        "waitType": "MEMORY_ALLOCATION_EXT",
+        "waitingTasks": 945018,
+        "waitTimeMilliseconds": 3283,
+        "signalWaitTimeMilliseconds": 0
+      },
+      {
+        "waitType": "SLEEP_MASTERDBREADY",
+        "waitingTasks": 2,
+        "waitTimeMilliseconds": 2840,
+        "signalWaitTimeMilliseconds": 0
+      }
+    ]
+  },
+  "rabbitMqBefore": {
+    "memoryBytes": 261267456,
+    "diskFreeBytes": 870981349376,
+    "fileDescriptorsUsed": 42,
+    "socketsUsed": 0,
+    "erlangProcessesUsed": 479,
+    "garbageCollectionCount": 1186805
+  },
+  "rabbitMqAfter": {
+    "memoryBytes": 267440128,
+    "diskFreeBytes": 870997241856,
+    "fileDescriptorsUsed": 42,
+    "socketsUsed": 0,
+    "erlangProcessesUsed": 482,
+    "garbageCollectionCount": 1362212
+  },
+  "queueBefore": {
+    "ready": 250000,
+    "unacknowledged": 0,
+    "consumers": 0,
+    "redeliveries": 0,
+    "deliveries": 0,
+    "acknowledgments": 0
+  },
+  "queueAfter": {
+    "ready": 0,
+    "unacknowledged": 0,
+    "consumers": 0,
+    "redeliveries": 0,
+    "deliveries": 0,
+    "acknowledgments": 0
+  },
+  "correctness": {
+    "passed": true,
+    "database": {
+      "rowCount": 250000,
+      "distinctMessageIdCount": 250000,
+      "duplicateMessageIdCount": 0,
+      "missingMessageIdCount": 0,
+      "unexpectedMessageIdCount": 0,
+      "invalidForeignKeyCount": 0
+    },
+    "queue": {
+      "ready": 0,
+      "unacknowledged": 0,
+      "consumers": 0,
+      "redeliveries": 0,
+      "deliveries": 0,
+      "acknowledgments": 0
+    },
+    "hiddenWorkerFailureCount": 0
+  },
+  "errors": [],
+  "valid": true
+}

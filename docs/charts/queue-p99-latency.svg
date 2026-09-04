@@ -2,18 +2,18 @@
 <style>text{font-family:ui-sans-serif,system-ui,sans-serif;fill:#17202a}.title{font-size:22px;font-weight:700}.label{font-size:14px}.value{font-size:14px;font-weight:650}.bar{fill:#2878b5}</style>
 <rect width="900" height="400" fill="#fff"/><text class="title" x="20" y="34">p99 delivery-to-acknowledgment latency</text>
 <text class="label" x="20" y="89">Individual insert per message</text>
-<rect class="bar" x="205" y="62" width="22.5" height="42" rx="4"/>
-<text class="value" x="235.5" y="89">14.3 milliseconds</text>
+<rect class="bar" x="205" y="62" width="28.3" height="42" rx="4"/>
+<text class="value" x="241.3" y="89">20.9 milliseconds</text>
 <text class="label" x="20" y="151">Table-valued parameter</text>
-<rect class="bar" x="205" y="124" width="307.0" height="42" rx="4"/>
-<text class="value" x="520.0" y="151">195.4 milliseconds</text>
+<rect class="bar" x="205" y="124" width="565.0" height="42" rx="4"/>
+<text class="value" x="778.0" y="151">417.8 milliseconds</text>
 <text class="label" x="20" y="213">Multiple INSERT statements</text>
-<rect class="bar" x="205" y="186" width="383.4" height="42" rx="4"/>
-<text class="value" x="596.4" y="213">244.1 milliseconds</text>
+<rect class="bar" x="205" y="186" width="213.7" height="42" rx="4"/>
+<text class="value" x="426.7" y="213">158.1 milliseconds</text>
 <text class="label" x="20" y="275">Multi-row VALUES</text>
-<rect class="bar" x="205" y="248" width="468.6" height="42" rx="4"/>
-<text class="value" x="681.6" y="275">298.3 milliseconds</text>
+<rect class="bar" x="205" y="248" width="337.1" height="42" rx="4"/>
+<text class="value" x="550.1" y="275">249.3 milliseconds</text>
 <text class="label" x="20" y="337">SqlBulkCopy</text>
-<rect class="bar" x="205" y="310" width="565.0" height="42" rx="4"/>
-<text class="value" x="778.0" y="337">359.7 milliseconds</text>
+<rect class="bar" x="205" y="310" width="558.4" height="42" rx="4"/>
+<text class="value" x="771.4" y="337">413.0 milliseconds</text>
 </svg>
