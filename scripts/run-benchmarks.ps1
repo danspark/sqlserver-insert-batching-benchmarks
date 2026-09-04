@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [ValidateSet("Smoke", "Full")]
+  [ValidateSet("Smoke", "Full", "Confirmation")]
   [string] $Profile = "Smoke",
   [string] $Scenario,
   [ValidateRange(1, 100000000)]

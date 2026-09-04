@@ -163,6 +163,32 @@ internal static class ReportApplication
                 $"{speedup:N2}x | yes |");
         }
 
+        IGrouping<InsertStrategyKind, ScenarioResult>[] confirmations = valid
+            .Where(static result => result.Configuration.Stage == "confirmation")
+            .GroupBy(static result => result.Configuration.Strategy)
+            .OrderBy(static group => group.Key)
+            .ToArray();
+        if (confirmations.Length > 0)
+        {
+            text.AppendLine();
+            text.AppendLine("### Long-run finalist confirmation");
+            text.AppendLine();
+            text.AppendLine("| Strategy | Repetitions | Rows/run | Configuration | Median rows/s | Range | Median p99 ack | Median duration |");
+            text.AppendLine("|---|---:|---:|---|---:|---:|---:|---:|");
+            foreach (IGrouping<InsertStrategyKind, ScenarioResult> group in confirmations)
+            {
+                Scenario config = group.First().Configuration;
+                double[] rates = group.Select(static result => result.CommittedRowsPerSecond).Order().ToArray();
+                double[] latencies = group.Select(static result => result.DeliveryToAcknowledgmentMilliseconds.P99).Order().ToArray();
+                double[] durations = group.Select(static result => result.DurationSeconds).Order().ToArray();
+                text.AppendLine(
+                    $"| {StrategyName(group.Key)} | {group.Count()} | {config.RowCount:N0} | " +
+                    $"{config.WorkerInstances} workers x {config.WritersPerInstance} writers, batch {config.BatchSize:N0} | " +
+                    $"{Median(rates):N0} | {rates[0]:N0}–{rates[^1]:N0} | {Median(latencies):N2} ms | " +
+                    $"{Median(durations):N2} s |");
+            }
+        }
+
         text.AppendLine();
         text.AppendLine("### Direct-to-database controls");
         text.AppendLine();
@@ -254,6 +280,10 @@ internal static class ReportApplication
                     || other.DeliveryToAcknowledgmentMilliseconds.P99 < candidate.DeliveryToAcknowledgmentMilliseconds.P99)))
             .OrderBy(static result => result.DeliveryToAcknowledgmentMilliseconds.P99);
     }
+
+    private static double Median(double[] sorted) => sorted.Length % 2 == 0
+        ? (sorted[(sorted.Length / 2) - 1] + sorted[sorted.Length / 2]) / 2
+        : sorted[sorted.Length / 2];
 
     private static async Task WriteCsvAsync(
         string path,
