@@ -70,6 +70,7 @@ public static class WorkerRunner
         long delivered = 0;
         long acknowledged = 0;
         long redelivered = 0;
+        long lastAcknowledgmentTimestamp = 0;
         long inFlight = 0;
         long trackedId = 0;
         var tracked = new ConcurrentDictionary<long, Task>();
@@ -136,7 +137,11 @@ public static class WorkerRunner
                             deliveryToAck,
                             errors,
                             failure,
-                            () => Interlocked.Increment(ref acknowledged),
+                            acknowledgedAt =>
+                            {
+                                Interlocked.Increment(ref acknowledged);
+                                UpdateMaximum(ref lastAcknowledgmentTimestamp, acknowledgedAt);
+                            },
                             () => Interlocked.Decrement(ref inFlight));
                         completionOwnsInFlight = true;
                         tracked[id] = completion;
@@ -235,6 +240,8 @@ public static class WorkerRunner
             CommittedRows = config.Scenario.Mode == WorkloadMode.NoOpQueue ? 0 : handler.CommittedRows,
             AcknowledgedMessages = Interlocked.Read(ref acknowledged),
             RedeliveredMessages = Interlocked.Read(ref redelivered),
+            LastAcknowledgmentTimestamp = Interlocked.Read(ref lastAcknowledgmentTimestamp),
+            StopwatchFrequency = Stopwatch.Frequency,
             DeliveryToCommitMicroseconds = [.. deliveryToCommit],
             DeliveryToAcknowledgmentMicroseconds = [.. deliveryToAck],
             SqlExecutionMilliseconds = [.. sqlExecution],
@@ -294,7 +301,7 @@ public static class WorkerRunner
         ConcurrentBag<long> deliveryToAck,
         ConcurrentBag<string> errors,
         CancellationTokenSource failure,
-        Action acknowledged,
+        Action<long> acknowledged,
         Action completed)
     {
         try
@@ -311,8 +318,9 @@ public static class WorkerRunner
                 acknowledgmentLock.Release();
             }
 
-            deliveryToAck.Add(ToMicroseconds(pending.DeliveredTimestamp, Stopwatch.GetTimestamp()));
-            acknowledged();
+            long acknowledgedAt = Stopwatch.GetTimestamp();
+            deliveryToAck.Add(ToMicroseconds(pending.DeliveredTimestamp, acknowledgedAt));
+            acknowledged(acknowledgedAt);
         }
         catch (Exception error)
         {
@@ -351,6 +359,21 @@ public static class WorkerRunner
 
     private static long ToMicroseconds(long start, long end) =>
         (long)Math.Round(Stopwatch.GetElapsedTime(start, end).TotalMilliseconds * 1_000.0);
+
+    private static void UpdateMaximum(ref long target, long value)
+    {
+        long observed = Volatile.Read(ref target);
+        while (value > observed)
+        {
+            long previous = Interlocked.CompareExchange(ref target, value, observed);
+            if (previous == observed)
+            {
+                return;
+            }
+
+            observed = previous;
+        }
+    }
 
     private static string? ReadOption(string[] args, string name)
     {

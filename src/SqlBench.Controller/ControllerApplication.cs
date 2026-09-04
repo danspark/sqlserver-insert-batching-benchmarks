@@ -183,10 +183,10 @@ internal static class ControllerApplication
         }
 
         await WaitForWorkerReadinessAsync(processes, TimeSpan.FromMinutes(2)).ConfigureAwait(false);
-        var timer = Stopwatch.StartNew();
+        long measuredStart = Stopwatch.GetTimestamp();
         await File.WriteAllTextAsync(gateFile, "run").ConfigureAwait(false);
         await WaitForWorkerCompletionAsync(processes, TimeSpan.FromMinutes(30)).ConfigureAwait(false);
-        timer.Stop();
+        long completionObserved = Stopwatch.GetTimestamp();
         await WaitForWorkersAsync(processes, TimeSpan.FromMinutes(2)).ConfigureAwait(false);
 
         var workerResults = new List<WorkerRunResult>();
@@ -227,13 +227,28 @@ internal static class ControllerApplication
         long delivered = workerResults.Sum(static worker => worker.DeliveredMessages);
         long committed = workerResults.Sum(static worker => worker.CommittedRows);
         long acknowledged = workerResults.Sum(static worker => worker.AcknowledgedMessages);
+        long finalAcknowledgment = workerResults.Select(static worker => worker.LastAcknowledgmentTimestamp)
+            .DefaultIfEmpty(0)
+            .Max();
+        bool compatibleMonotonicClocks = workerResults.All(static worker =>
+            worker.StopwatchFrequency == Stopwatch.Frequency);
+        TimeSpan measuredDuration = acknowledged == scenario.RowCount
+            && finalAcknowledgment >= measuredStart
+            && compatibleMonotonicClocks
+                ? Stopwatch.GetElapsedTime(measuredStart, finalAcknowledgment)
+                : Stopwatch.GetElapsedTime(measuredStart, completionObserved);
+        if (!compatibleMonotonicClocks)
+        {
+            errors.Add("Worker and controller monotonic-clock frequencies did not match.");
+        }
+
         bool correct = databaseVerification.Passed(expectedDatabaseRows)
             && finalQueue.Ready == 0
             && finalQueue.Unacknowledged == 0
             && acknowledged == scenario.RowCount
             && errors.Count == 0;
         return CreateResult(
-            scenario, gitCommit, workload, timer.Elapsed, delivered, committed, acknowledged, workerResults,
+            scenario, gitCommit, workload, measuredDuration, delivered, committed, acknowledged, workerResults,
             sqlBefore, sqlAfter, rabbitBefore, rabbitAfter, preloaded, finalQueue,
             databaseVerification, correct, errors);
     }
@@ -303,6 +318,8 @@ internal static class ControllerApplication
             DeliveredMessages = workload.Count,
             CommittedRows = workload.Count,
             AcknowledgedMessages = 0,
+            LastAcknowledgmentTimestamp = 0,
+            StopwatchFrequency = Stopwatch.Frequency,
             DeliveryToCommitMicroseconds = [.. commitLatencies],
             DeliveryToAcknowledgmentMicroseconds = [],
             SqlExecutionMilliseconds = [.. sqlDurations],

@@ -65,6 +65,8 @@ public sealed record WorkerRunResult
     public long CommittedRows { get; init; }
     public long AcknowledgedMessages { get; init; }
     public long RedeliveredMessages { get; init; }
+    public long LastAcknowledgmentTimestamp { get; init; }
+    public long StopwatchFrequency { get; init; }
     public required long[] DeliveryToCommitMicroseconds { get; init; }
     public required long[] DeliveryToAcknowledgmentMicroseconds { get; init; }
     public required double[] SqlExecutionMilliseconds { get; init; }
