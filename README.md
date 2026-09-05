@@ -122,8 +122,19 @@ Stages run in search order; scenario order is rotated deterministically inside e
 
 ## Measured results
 
-Generated from 109 raw scenario files. 109 passed every correctness check.
-Measured binaries: `2f0f925` (4 runs), `c6d3469` (15 runs), `e0d9785` (90 runs).
+Generated from 239 raw scenario files. 239 passed every correctness check.
+Measured binaries: `2f0f925` (4 runs), `31f7dec` (130 runs), `c6d3469` (15 runs), `e0d9785` (90 runs).
+
+### SqlBatch conclusion
+
+These are observed medians from the repeated finalist matrix, not global optima. Throughput remains the selection metric even when the faster path allocates more.
+
+| Binary | Strategy | Native median rows/s | SqlBatch median rows/s | Change | Faster tested API |
+|---|---|---:|---:|---:|---|
+| `31f7dec` | Individual insert per message | 1,333 | 339 | -74.6% | Native |
+| `31f7dec` | Table-valued parameter | 12,685 | 13,090 | 3.2% | SqlBatch |
+| `31f7dec` | Multiple INSERT statements | 12,198 | 12,919 | 5.9% | SqlBatch |
+| `31f7dec` | Multi-row VALUES | 14,517 | 19,568 | 34.8% | SqlBatch |
 
 ### Same-binary no-op queue ceilings
 
@@ -132,6 +143,7 @@ A ceiling is compared only when its binary, worker topology, process batcher, ba
 | Binary | Fastest SQL-backed scenario | SQL rows/s | Matching no-op ack/s | No-op p99 ack | Headroom | Attribution |
 |---|---|---:|---:|---:|---:|---|
 | `2f0f925` | confirmed-table-valued-parameter | 27,790 | n/a | n/a | n/a | unavailable: no matching control |
+| `31f7dec` | confirmed-sqlbatch-multi-row-values-sqlbatch | 19,748 | 31,798 | 6.56 ms | 1.61x | RabbitMQ ceiling not reached |
 | `c6d3469` | confirmed-table-valued-parameter | 29,082 | n/a | n/a | n/a | unavailable: no matching control |
 | `e0d9785` | finalist-bulkcopy | 23,051 | n/a | n/a | n/a | unavailable: no matching control |
 
@@ -144,10 +156,97 @@ A ceiling is compared only when its binary, worker topology, process batcher, ba
 | Strategy | SQL API | SqlBatch cap/lanes/delay | Batcher | Workers x writers | Batch | Delay | Capacity | Prefetch | Distribution | Rows | Rows/s | DML execute calls | Rows/execute | Commands/execute mean/p95/max | p50 commit | p99 ack | Speedup | Correct |
 |---|---|---:|---|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
 | Individual insert per message | SqlCommand | n/a | None | 2 x 4 | 1 | 5 ms | 1,000 | 250 | Uniform | 10,000 | 3,004 | n/a | n/a | n/a | 7.74 ms | 20.90 ms | 1.00x | yes |
+| Individual insert per message | SqlBatch | 1/8/1 ms | None | 1 x 8 | 1 | 5 ms | 1,000 | 250 | Uniform | 2,000 | 834 | 2,000 | 1.0 | 1.00/1/1 | 64.49 ms | 306.95 ms | 0.28x | yes |
 | Table-valued parameter | SqlCommand | n/a | Channel | 1 x 2 | 5,000 | 5 ms | 10,000 | 20,000 | Uniform | 750,000 | 29,082 | n/a | n/a | n/a | 167.23 ms | 417.83 ms | 9.68x | yes |
+| Table-valued parameter | SqlBatch | 4/1/1 ms | Channel | 1 x 4 | 500 | 5 ms | 4,000 | 2,000 | Uniform | 750,000 | 14,646 | 797 | 941.0 | 2.00/3/4 | 369.73 ms | 502.43 ms | 4.88x | yes |
 | Multiple INSERT statements | SqlCommand | n/a | Channel | 4 x 2 | 50 | 5 ms | 2,000 | 200 | Uniform | 750,000 | 15,132 | n/a | n/a | n/a | 94.89 ms | 158.06 ms | 5.04x | yes |
-| Multi-row VALUES | SqlCommand | n/a | Channel | 2 x 2 | 100 | 5 ms | 2,000 | 400 | Uniform | 10,000 | 13,505 | n/a | n/a | n/a | 79.11 ms | 249.30 ms | 4.50x | yes |
+| Multiple INSERT statements | SqlBatch | 1/4/1 ms | Channel | 1 x 4 | 50 | 5 ms | 2,000 | 400 | Uniform | 500,000 | 13,328 | 10,001 | 50.0 | 1.00/1/1 | 110.27 ms | 240.34 ms | 4.44x | yes |
+| Multi-row VALUES | SqlCommand | n/a | Channel | 1 x 8 | 100 | 5 ms | 2,000 | 800 | Uniform | 20,000 | 16,339 | 202 | 99.0 | 1.00/1/1 | 120.43 ms | 509.40 ms | 5.44x | yes |
+| Multi-row VALUES | SqlBatch | 1/4/1 ms | Channel | 1 x 4 | 100 | 5 ms | 2,000 | 800 | Uniform | 500,000 | 19,748 | 5,004 | 99.9 | 1.00/1/1 | 117.92 ms | 177.81 ms | 6.57x | yes |
 | SqlBulkCopy | SqlBulkCopy | n/a | Channel | 1 x 2 | 1,000 | 5 ms | 8,000 | 2,000 | Uniform | 250,000 | 23,051 | n/a | n/a | n/a | 118.56 ms | 412.96 ms | 7.67x | yes |
+
+### Paired SqlCommand and SqlBatch executions
+
+Each pair uses the same measured binary, rows, seed, distribution, worker topology, process batcher, logical batch size, capacity, and prefetch. Each SqlBatch request lane has one outstanding execution and its commands execute serially on that connection. Counts are DML execute API invocations. Native transaction begin and commit operations are outside this counter, so it is not a total network or TDS round-trip count. A SqlBatch execute is sent as one TDS request containing one RPC record per command.
+
+| Stage | Repetition | Strategy | Distribution | Workers x writers | Logical batch | SqlBatch cap/lanes/delay | Actual commands/execute mean/p95/max | Native rows/s | SqlBatch rows/s | Rate change | Native DML executes | SqlBatch DML executes | Execute reduction | SqlBatch p99 ack |
+|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| single-command-control | 1 | Individual insert per message | Uniform | 1 x 1 | 1 | 1/1/1 ms | 1.00/1/1 | 133 | 110 | -17.3 % | 2,000 | 2,000 | 0.0 % | 163.62 ms |
+| single-command-control | 1 | Table-valued parameter | Uniform | 1 x 1 | 500 | 1/1/1 ms | 1.00/1/1 | 9,503 | 10,229 | 7.6 % | 41 | 41 | 0.0 % | 331.22 ms |
+| single-command-control | 1 | Multiple INSERT statements | Uniform | 1 x 1 | 50 | 1/1/1 ms | 1.00/1/1 | 3,429 | 3,521 | 2.7 % | 400 | 400 | 0.0 % | 211.92 ms |
+| single-command-control | 1 | Multi-row VALUES | Uniform | 1 x 1 | 100 | 1/1/1 ms | 1.00/1/1 | 3,981 | 4,610 | 15.8 % | 200 | 200 | 0.0 % | 293.73 ms |
+| writer-scaling | 1 | Individual insert per message | Uniform | 1 x 2 | 1 | 2/1/1 ms | 2.00/2/2 | 493 | 166 | -66.2 % | 2,000 | 1,000 | 50.0 % | 40.15 ms |
+| writer-scaling | 1 | Individual insert per message | Uniform | 1 x 4 | 1 | 4/1/1 ms | 4.00/4/4 | 1,269 | 108 | -91.5 % | 2,000 | 500 | 75.0 % | 2,613.36 ms |
+| writer-scaling | 1 | Individual insert per message | Uniform | 1 x 8 | 1 | 8/1/1 ms | 8.00/8/8 | 1,143 | 185 | -83.8 % | 2,000 | 250 | 87.5 % | 510.31 ms |
+| writer-scaling | 1 | Table-valued parameter | Uniform | 1 x 2 | 500 | 2/1/1 ms | 1.08/2/2 | 12,810 | 11,107 | -13.3 % | 41 | 38 | 7.3 % | 481.68 ms |
+| writer-scaling | 1 | Table-valued parameter | Uniform | 1 x 4 | 500 | 4/1/1 ms | 2.16/4/4 | 12,801 | 12,605 | -1.5 % | 44 | 19 | 56.8 % | 529.19 ms |
+| writer-scaling | 1 | Table-valued parameter | Uniform | 1 x 8 | 500 | 8/1/1 ms | 5.62/8/8 | 11,315 | 12,136 | 7.3 % | 52 | 8 | 84.6 % | 658.94 ms |
+| writer-scaling | 1 | Multiple INSERT statements | Uniform | 1 x 2 | 50 | 2/1/1 ms | 1.03/1/2 | 7,141 | 3,683 | -48.4 % | 400 | 389 | 2.7 % | 367.24 ms |
+| writer-scaling | 1 | Multiple INSERT statements | Uniform | 1 x 4 | 50 | 4/1/1 ms | 2.05/2/4 | 11,524 | 3,721 | -67.7 % | 400 | 195 | 51.2 % | 605.64 ms |
+| writer-scaling | 1 | Multiple INSERT statements | Uniform | 1 x 8 | 50 | 8/1/1 ms | 4.08/7/8 | 12,851 | 3,890 | -69.7 % | 400 | 98 | 75.5 % | 977.33 ms |
+| writer-scaling | 1 | Multi-row VALUES | Uniform | 1 x 2 | 100 | 2/1/1 ms | 1.03/1/2 | 9,111 | 4,671 | -48.7 % | 200 | 195 | 2.5 % | 436.03 ms |
+| writer-scaling | 1 | Multi-row VALUES | Uniform | 1 x 4 | 100 | 4/1/1 ms | 2.08/3/4 | 15,503 | 4,452 | -71.3 % | 200 | 96 | 52.0 % | 632.73 ms |
+| writer-scaling | 1 | Multi-row VALUES | Uniform | 1 x 8 | 100 | 8/1/1 ms | 4.55/8/8 | 16,339 | 4,455 | -72.7 % | 202 | 44 | 78.2 % | 798.92 ms |
+| command-cap | 1 | Individual insert per message | Uniform | 1 x 8 | 1 | 1/1/1 ms | 1.00/1/1 | 1,143 | 159 | -86.1 % | 2,000 | 2,000 | 0.0 % | 571.09 ms |
+| command-cap | 1 | Individual insert per message | Uniform | 1 x 8 | 1 | 2/1/1 ms | 2.00/2/2 | 1,143 | 160 | -86.0 % | 2,000 | 1,000 | 50.0 % | 556.16 ms |
+| command-cap | 1 | Individual insert per message | Uniform | 1 x 8 | 1 | 4/1/1 ms | 4.00/4/4 | 1,143 | 100 | -91.2 % | 2,000 | 500 | 75.0 % | 3,573.39 ms |
+| command-cap | 1 | Table-valued parameter | Uniform | 1 x 8 | 500 | 1/1/1 ms | 1.00/1/1 | 11,315 | 10,406 | -8.0 % | 52 | 43 | 17.3 % | 744.56 ms |
+| command-cap | 1 | Table-valued parameter | Uniform | 1 x 8 | 500 | 2/1/1 ms | 2.00/2/2 | 11,315 | 2,204 | -80.5 % | 52 | 22 | 57.7 % | 7,938.63 ms |
+| command-cap | 1 | Table-valued parameter | Uniform | 1 x 8 | 500 | 4/1/1 ms | 4.00/4/4 | 11,315 | 11,797 | 4.3 % | 52 | 11 | 78.8 % | 737.33 ms |
+| command-cap | 1 | Multiple INSERT statements | Uniform | 1 x 8 | 50 | 1/1/1 ms | 1.00/1/1 | 12,851 | 3,542 | -72.4 % | 400 | 400 | 0.0 % | 1,104.35 ms |
+| command-cap | 1 | Multiple INSERT statements | Uniform | 1 x 8 | 50 | 2/1/1 ms | 2.00/2/2 | 12,851 | 3,694 | -71.3 % | 400 | 200 | 50.0 % | 1,001.42 ms |
+| command-cap | 1 | Multiple INSERT statements | Uniform | 1 x 8 | 50 | 4/1/1 ms | 4.00/4/4 | 12,851 | 3,990 | -69.0 % | 400 | 100 | 75.0 % | 950.75 ms |
+| command-cap | 1 | Multi-row VALUES | Uniform | 1 x 8 | 100 | 1/1/1 ms | 1.00/1/1 | 16,339 | 4,869 | -70.2 % | 202 | 200 | 1.0 % | 723.06 ms |
+| command-cap | 1 | Multi-row VALUES | Uniform | 1 x 8 | 100 | 2/1/1 ms | 2.00/2/2 | 16,339 | 5,239 | -67.9 % | 202 | 100 | 50.5 % | 654.56 ms |
+| command-cap | 1 | Multi-row VALUES | Uniform | 1 x 8 | 100 | 4/1/1 ms | 4.00/4/4 | 16,339 | 4,618 | -71.7 % | 202 | 50 | 75.2 % | 728.05 ms |
+| request-concurrency | 1 | Individual insert per message | Uniform | 1 x 4 | 1 | 1/4/1 ms | 1.00/1/1 | 1,269 | 487 | -61.7 % | 2,000 | 2,000 | 0.0 % | 55.97 ms |
+| request-concurrency | 1 | Individual insert per message | Uniform | 1 x 4 | 1 | 2/2/1 ms | 2.00/2/2 | 1,269 | 317 | -75.0 % | 2,000 | 1,000 | 50.0 % | 112.00 ms |
+| request-concurrency | 1 | Individual insert per message | Uniform | 1 x 8 | 1 | 1/8/1 ms | 1.00/1/1 | 1,143 | 834 | -27.0 % | 2,000 | 2,000 | 0.0 % | 306.95 ms |
+| request-concurrency | 1 | Individual insert per message | Uniform | 1 x 8 | 1 | 2/4/1 ms | 2.00/2/2 | 1,143 | 473 | -58.6 % | 2,000 | 1,001 | 50.0 % | 317.04 ms |
+| request-concurrency | 1 | Individual insert per message | Uniform | 1 x 8 | 1 | 4/2/1 ms | 4.00/4/4 | 1,143 | 269 | -76.4 % | 2,000 | 500 | 75.0 % | 416.88 ms |
+| request-concurrency | 1 | Table-valued parameter | Uniform | 1 x 4 | 500 | 1/4/1 ms | 1.00/1/1 | 12,801 | 13,304 | 3.9 % | 44 | 44 | 0.0 % | 529.74 ms |
+| request-concurrency | 1 | Table-valued parameter | Uniform | 1 x 4 | 500 | 2/2/1 ms | 1.32/2/2 | 12,801 | 10,474 | -18.2 % | 44 | 31 | 29.5 % | 672.39 ms |
+| request-concurrency | 1 | Table-valued parameter | Uniform | 1 x 8 | 500 | 1/8/1 ms | 1.00/1/1 | 11,315 | 1,751 | -84.5 % | 52 | 45 | 13.5 % | 9,402.62 ms |
+| request-concurrency | 1 | Table-valued parameter | Uniform | 1 x 8 | 500 | 2/4/1 ms | 1.59/2/2 | 11,315 | 2,185 | -80.7 % | 52 | 27 | 48.1 % | 8,331.60 ms |
+| request-concurrency | 1 | Table-valued parameter | Uniform | 1 x 8 | 500 | 4/2/1 ms | 3.13/4/4 | 11,315 | 2,180 | -80.7 % | 52 | 15 | 71.2 % | 4,520.16 ms |
+| request-concurrency | 1 | Multiple INSERT statements | Uniform | 1 x 4 | 50 | 1/4/1 ms | 1.00/1/1 | 11,524 | 11,513 | -0.1 % | 400 | 400 | 0.0 % | 354.67 ms |
+| request-concurrency | 1 | Multiple INSERT statements | Uniform | 1 x 4 | 50 | 2/2/1 ms | 1.28/2/2 | 11,524 | 6,650 | -42.3 % | 400 | 313 | 21.8 % | 471.65 ms |
+| request-concurrency | 1 | Multiple INSERT statements | Uniform | 1 x 8 | 50 | 1/8/1 ms | 1.00/1/1 | 12,851 | 12,955 | 0.8 % | 400 | 401 | -0.2 % | 366.24 ms |
+| request-concurrency | 1 | Multiple INSERT statements | Uniform | 1 x 8 | 50 | 2/4/1 ms | 1.81/2/2 | 12,851 | 11,329 | -11.8 % | 400 | 222 | 44.5 % | 401.32 ms |
+| request-concurrency | 1 | Multiple INSERT statements | Uniform | 1 x 8 | 50 | 4/2/1 ms | 3.06/4/4 | 12,851 | 6,727 | -47.7 % | 400 | 131 | 67.2 % | 524.31 ms |
+| request-concurrency | 1 | Multi-row VALUES | Uniform | 1 x 4 | 100 | 1/4/1 ms | 1.00/1/1 | 15,503 | 15,114 | -2.5 % | 200 | 200 | 0.0 % | 346.73 ms |
+| request-concurrency | 1 | Multi-row VALUES | Uniform | 1 x 4 | 100 | 2/2/1 ms | 2.00/2/2 | 15,503 | 7,840 | -49.4 % | 200 | 100 | 50.0 % | 465.35 ms |
+| request-concurrency | 1 | Multi-row VALUES | Uniform | 1 x 8 | 100 | 1/8/1 ms | 1.00/1/1 | 16,339 | 16,030 | -1.9 % | 202 | 200 | 1.0 % | 631.93 ms |
+| request-concurrency | 1 | Multi-row VALUES | Uniform | 1 x 8 | 100 | 2/4/1 ms | 1.83/2/2 | 16,339 | 13,554 | -17.0 % | 202 | 110 | 45.5 % | 406.43 ms |
+| request-concurrency | 1 | Multi-row VALUES | Uniform | 1 x 8 | 100 | 4/2/1 ms | 3.72/4/4 | 16,339 | 9,364 | -42.7 % | 202 | 54 | 73.3 % | 532.63 ms |
+| delay | 1 | Individual insert per message | Uniform | 1 x 4 | 1 | 4/1/5 ms | 4.00/4/4 | 1,269 | 181 | -85.8 % | 2,000 | 500 | 75.0 % | 132.22 ms |
+| delay | 1 | Individual insert per message | Uniform | 1 x 4 | 1 | 4/1/20 ms | 4.00/4/4 | 1,269 | 177 | -86.1 % | 2,000 | 500 | 75.0 % | 148.15 ms |
+| delay | 1 | Multiple INSERT statements | Uniform | 1 x 4 | 50 | 4/1/5 ms | 4.00/4/4 | 11,524 | 1,192 | -89.7 % | 400 | 100 | 75.0 % | 5,474.05 ms |
+| delay | 1 | Multiple INSERT statements | Uniform | 1 x 4 | 50 | 4/1/20 ms | 4.00/4/4 | 11,524 | 3,624 | -68.5 % | 400 | 100 | 75.0 % | 623.12 ms |
+| distribution | 1 | Individual insert per message | ModerateSkew | 1 x 4 | 1 | 4/1/1 ms | 4.00/4/4 | 1,223 | 169 | -86.1 % | 2,000 | 500 | 75.0 % | 145.45 ms |
+| distribution | 1 | Individual insert per message | HotParent | 1 x 4 | 1 | 4/1/1 ms | 4.00/4/4 | 1,255 | 178 | -85.8 % | 2,000 | 500 | 75.0 % | 134.00 ms |
+| distribution | 1 | Table-valued parameter | ModerateSkew | 1 x 4 | 500 | 4/1/1 ms | 2.22/4/4 | 9,968 | 12,868 | 29.1 % | 47 | 18 | 61.7 % | 579.22 ms |
+| distribution | 1 | Table-valued parameter | HotParent | 1 x 4 | 500 | 4/1/1 ms | 2.26/4/4 | 12,602 | 12,299 | -2.4 % | 41 | 19 | 53.7 % | 572.32 ms |
+| distribution | 1 | Multiple INSERT statements | ModerateSkew | 1 x 4 | 50 | 4/1/1 ms | 2.04/3/4 | 2,306 | 4,063 | 76.2 % | 400 | 196 | 51.0 % | 602.10 ms |
+| distribution | 1 | Multiple INSERT statements | HotParent | 1 x 4 | 50 | 4/1/1 ms | 2.04/3/4 | 11,301 | 3,717 | -67.1 % | 401 | 196 | 51.1 % | 522.05 ms |
+| distribution | 1 | Multi-row VALUES | ModerateSkew | 1 x 4 | 100 | 4/1/1 ms | 2.22/4/4 | 2,851 | 2,350 | -17.6 % | 200 | 90 | 55.0 % | 4,266.06 ms |
+| distribution | 1 | Multi-row VALUES | HotParent | 1 x 4 | 100 | 4/1/1 ms | 2.15/4/4 | 14,134 | 5,017 | -64.5 % | 200 | 93 | 53.5 % | 802.20 ms |
+| instance-scaling | 1 | Individual insert per message | Uniform | 2 x 4 | 1 | 4/1/1 ms | 4.00/4/4 | 1,513 | 205 | -86.5 % | 2,000 | 500 | 75.0 % | 277.25 ms |
+| instance-scaling | 1 | Individual insert per message | Uniform | 4 x 4 | 1 | 4/1/1 ms | 3.78/4/4 | 1,210 | 425 | -64.9 % | 2,000 | 529 | 73.6 % | 227.51 ms |
+| instance-scaling | 1 | Multiple INSERT statements | Uniform | 2 x 4 | 50 | 4/1/1 ms | 2.09/3/4 | 12,845 | 5,958 | -53.6 % | 400 | 191 | 52.2 % | 657.63 ms |
+| instance-scaling | 1 | Multiple INSERT statements | Uniform | 4 x 4 | 50 | 4/1/1 ms | 2.19/4/4 | 8,845 | 10,048 | 13.6 % | 401 | 184 | 54.1 % | 843.82 ms |
+| confirmation | 1 | Individual insert per message | Uniform | 1 x 4 | 1 | 1/4/1 ms | 1.00/1/1 | 1,333 | 335 | -74.9 % | 50,000 | 50,000 | 0.0 % | 503.45 ms |
+| confirmation | 2 | Individual insert per message | Uniform | 1 x 4 | 1 | 1/4/1 ms | 1.00/1/1 | 674 | 339 | -49.7 % | 50,000 | 50,000 | 0.0 % | 524.52 ms |
+| confirmation | 3 | Individual insert per message | Uniform | 1 x 4 | 1 | 1/4/1 ms | 1.00/1/1 | 1,980 | 359 | -81.9 % | 50,000 | 50,000 | 0.0 % | 541.39 ms |
+| confirmation | 1 | Table-valued parameter | Uniform | 1 x 4 | 500 | 4/1/1 ms | 2.00/3/4 | 11,179 | 14,646 | 31.0 % | 1,721 | 797 | 53.7 % | 502.43 ms |
+| confirmation | 2 | Table-valued parameter | Uniform | 1 x 4 | 500 | 4/1/1 ms | 2.00/3/4 | 13,219 | 13,090 | -1.0 % | 1,743 | 809 | 53.6 % | 550.25 ms |
+| confirmation | 3 | Table-valued parameter | Uniform | 1 x 4 | 500 | 4/1/1 ms | 2.01/3/4 | 12,685 | 9,101 | -28.3 % | 1,712 | 774 | 54.8 % | 6,229.91 ms |
+| confirmation | 1 | Multiple INSERT statements | Uniform | 1 x 4 | 50 | 1/4/1 ms | 1.00/1/1 | 13,521 | 12,060 | -10.8 % | 10,000 | 10,003 | -0.0 % | 281.76 ms |
+| confirmation | 2 | Multiple INSERT statements | Uniform | 1 x 4 | 50 | 1/4/1 ms | 1.00/1/1 | 8,688 | 12,919 | 48.7 % | 10,000 | 10,000 | 0.0 % | 277.84 ms |
+| confirmation | 3 | Multiple INSERT statements | Uniform | 1 x 4 | 50 | 1/4/1 ms | 1.00/1/1 | 12,198 | 13,328 | 9.3 % | 10,000 | 10,001 | -0.0 % | 240.34 ms |
+| confirmation | 1 | Multi-row VALUES | Uniform | 1 x 4 | 100 | 1/4/1 ms | 1.00/1/1 | 14,731 | 19,568 | 32.8 % | 5,000 | 5,000 | 0.0 % | 183.53 ms |
+| confirmation | 2 | Multi-row VALUES | Uniform | 1 x 4 | 100 | 1/4/1 ms | 1.00/1/1 | 10,792 | 17,941 | 66.2 % | 5,003 | 5,000 | 0.1 % | 323.53 ms |
+| confirmation | 3 | Multi-row VALUES | Uniform | 1 x 4 | 100 | 1/4/1 ms | 1.00/1/1 | 14,517 | 19,748 | 36.0 % | 5,001 | 5,004 | -0.1 % | 177.81 ms |
 
 ### Long-run finalist confirmation
 
@@ -158,10 +257,18 @@ DML execute counts and actual commands per execute come from the repetition near
 | Strategy | SQL API | SqlBatch cap/lanes/delay | Binary | Repetitions | Rows/run | Configuration | DML execute calls | Commands/execute mean/p95/max | Median rows/s | Range | Median p99 ack | Median duration |
 |---|---|---:|---|---:|---:|---|---:|---:|---:|---:|---:|---:|
 | Individual insert per message | SqlCommand | n/a | `c6d3469` | 3 | 750,000 | 2 workers x 4 writers, batch 1 | n/a | n/a | 1,934 | 1,842–2,053 | 165.98 ms | 387.76 s |
+| Individual insert per message | SqlCommand | n/a | `31f7dec` | 3 | 50,000 | 1 worker x 4 writers, batch 1 | 50,000 | 1.00/1/1 | 1,333 | 674–1,980 | 118.98 ms | 37.50 s |
+| Individual insert per message | SqlBatch | 1/4/1 ms | `31f7dec` | 3 | 50,000 | 1 worker x 4 writers, batch 1 | 50,000 | 1.00/1/1 | 339 | 335–359 | 524.52 ms | 147.42 s |
 | Table-valued parameter | SqlCommand | n/a | `c6d3469` | 3 | 750,000 | 1 worker x 2 writers, batch 5,000 | n/a | n/a | 23,957 | 20,739–29,082 | 417.83 ms | 31.31 s |
 | Table-valued parameter | SqlCommand | n/a | `2f0f925` | 3 | 750,000 | 1 worker x 2 writers, batch 5,000 | n/a | n/a | 22,808 | 17,609–27,790 | 2,226.77 ms | 32.88 s |
+| Table-valued parameter | SqlCommand | n/a | `31f7dec` | 3 | 750,000 | 1 worker x 4 writers, batch 500 | 1,712 | 1.00/1/1 | 12,685 | 11,179–13,219 | 817.28 ms | 59.13 s |
+| Table-valued parameter | SqlBatch | 4/1/1 ms | `31f7dec` | 3 | 750,000 | 1 worker x 4 writers, batch 500 | 809 | 2.00/3/4 | 13,090 | 9,101–14,646 | 550.25 ms | 57.30 s |
 | Multiple INSERT statements | SqlCommand | n/a | `c6d3469` | 3 | 750,000 | 4 workers x 2 writers, batch 50 | n/a | n/a | 13,928 | 8,474–15,132 | 265.98 ms | 53.85 s |
+| Multiple INSERT statements | SqlCommand | n/a | `31f7dec` | 3 | 500,000 | 1 worker x 4 writers, batch 50 | 10,000 | 1.00/1/1 | 12,198 | 8,688–13,521 | 317.02 ms | 40.99 s |
+| Multiple INSERT statements | SqlBatch | 1/4/1 ms | `31f7dec` | 3 | 500,000 | 1 worker x 4 writers, batch 50 | 10,000 | 1.00/1/1 | 12,919 | 12,060–13,328 | 277.84 ms | 38.70 s |
 | Multi-row VALUES | SqlCommand | n/a | `c6d3469` | 3 | 750,000 | 2 workers x 2 writers, batch 100 | n/a | n/a | 8,809 | 8,749–8,964 | 1,246.02 ms | 85.14 s |
+| Multi-row VALUES | SqlCommand | n/a | `31f7dec` | 3 | 500,000 | 1 worker x 4 writers, batch 100 | 5,001 | 1.00/1/1 | 14,517 | 10,792–14,731 | 1,647.68 ms | 34.44 s |
+| Multi-row VALUES | SqlBatch | 1/4/1 ms | `31f7dec` | 3 | 500,000 | 1 worker x 4 writers, batch 100 | 5,000 | 1.00/1/1 | 19,568 | 17,941–19,748 | 183.53 ms | 25.55 s |
 | SqlBulkCopy | SqlBulkCopy | n/a | `c6d3469` | 3 | 750,000 | 1 worker x 2 writers, batch 1,000 | n/a | n/a | 20,543 | 20,081–21,789 | 339.33 ms | 36.51 s |
 
 #### Cross-binary optimization check
@@ -175,20 +282,32 @@ Each row is the repetition nearest that finalist's median throughput. Worker pea
 | Strategy | SQL API | Binary | App CPU | Worker peak RSS | Allocated/row | GC0 | GC1 | GC2 | SQL CPU | SQL writes | SQL write stall | WRITELOG wait | Rabbit memory |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | Individual insert per message | SqlCommand | `c6d3469` | 914.0 s | 377 MiB | 27,394 B | 1,413 | 256 | 85 | 908.5 s | 2,806 MiB | 198,650 ms | 838,325 ms | 255 MiB |
+| Individual insert per message | SqlCommand | `31f7dec` | 45.0 s | 141 MiB | 26,117 B | 90 | 17 | 6 | 62.9 s | 228 MiB | 7,646 ms | 16,307 ms | 215 MiB |
+| Individual insert per message | SqlBatch | `31f7dec` | 61.0 s | 137 MiB | 33,667 B | 109 | 12 | 11 | 71.8 s | 198 MiB | 9,466 ms | 58,745 ms | 218 MiB |
 | Table-valued parameter | SqlCommand | `c6d3469` | 104.6 s | 202 MiB | 2,895 B | 172 | 151 | 43 | 20.9 s | 647 MiB | 6,961 ms | 424 ms | 240 MiB |
 | Table-valued parameter | SqlCommand | `2f0f925` | 95.3 s | 240 MiB | 2,437 B | 133 | 107 | 17 | 20.6 s | 574 MiB | 5,029 ms | 282 ms | 261 MiB |
+| Table-valued parameter | SqlCommand | `31f7dec` | 140.6 s | 171 MiB | 2,631 B | 173 | 147 | 46 | 43.6 s | 836 MiB | 5,242 ms | 2,413 ms | 214 MiB |
+| Table-valued parameter | SqlBatch | `31f7dec` | 127.1 s | 169 MiB | 2,593 B | 171 | 162 | 46 | 32.6 s | 797 MiB | 5,364 ms | 985 ms | 225 MiB |
 | Multiple INSERT statements | SqlCommand | `c6d3469` | 143.9 s | 590 MiB | 12,632 B | 709 | 516 | 195 | 128.8 s | 832 MiB | 7,762 ms | 30,161 ms | 246 MiB |
+| Multiple INSERT statements | SqlCommand | `31f7dec` | 64.7 s | 152 MiB | 9,521 B | 415 | 378 | 101 | 75.3 s | 516 MiB | 11,897 ms | 4,644 ms | 232 MiB |
+| Multiple INSERT statements | SqlBatch | `31f7dec` | 69.6 s | 153 MiB | 10,358 B | 399 | 223 | 55 | 80.1 s | 475 MiB | 2,882 ms | 6,059 ms | 224 MiB |
 | Multi-row VALUES | SqlCommand | `c6d3469` | 121.3 s | 330 MiB | 10,409 B | 602 | 594 | 121 | 123.7 s | 967 MiB | 34,434 ms | 9,074 ms | 240 MiB |
+| Multi-row VALUES | SqlCommand | `31f7dec` | 58.9 s | 158 MiB | 8,053 B | 387 | 385 | 123 | 78.7 s | 536 MiB | 2,801 ms | 3,101 ms | 233 MiB |
+| Multi-row VALUES | SqlBatch | `31f7dec` | 41.2 s | 160 MiB | 8,519 B | 359 | 253 | 82 | 68.3 s | 456 MiB | 1,954 ms | 2,287 ms | 224 MiB |
 | SqlBulkCopy | SqlBulkCopy | `c6d3469` | 167.8 s | 199 MiB | 2,969 B | 186 | 175 | 50 | 32.4 s | 887 MiB | 3,856 ms | 546 ms | 235 MiB |
 
 ### Direct-to-database controls
 
 | Strategy | SQL API | SqlBatch cap/lanes/delay | Writers | Batch | DML execute calls | Commands/execute mean/p95/max | Direct rows/s | Comparable queue rows/s | Queue/direct | p50 commit delta | SQL p50 | Transaction p50 |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Individual insert per message | SqlCommand | n/a | 4 | 1 | n/a | n/a | 477 | 1,784 | 374.1 % | 0.05 ms | 0.68 ms | 7.52 ms |
+| Individual insert per message | SqlCommand | n/a | 4 | 1 | 2,000 | 1.00/1/1 | 508 | 1,269 | 250.0 % | -0.35 ms | 0.69 ms | 7.56 ms |
+| Individual insert per message | SqlBatch | 4/1/1 ms | 4 | 1 | 1,000 | 2.00/2/2 | 143 | 108 | 75.6 % | 68.39 ms | 14.11 ms | 14.11 ms |
 | Table-valued parameter | SqlCommand | n/a | 2 | 500 | n/a | n/a | 19,708 | 11,910 | 60.4 % | 68.38 ms | 38.62 ms | 43.69 ms |
-| Multiple INSERT statements | SqlCommand | n/a | 2 | 50 | n/a | n/a | 7,650 | 5,128 | 67.0 % | 52.71 ms | 6.16 ms | 11.99 ms |
-| Multi-row VALUES | SqlCommand | n/a | 2 | 100 | n/a | n/a | 12,929 | 8,412 | 65.1 % | 63.16 ms | 8.09 ms | 14.12 ms |
+| Table-valued parameter | SqlBatch | 4/1/1 ms | 4 | 500 | 20 | 2.00/3/3 | 16,848 | 12,605 | 74.8 % | 237.25 ms | 79.96 ms | 79.96 ms |
+| Multiple INSERT statements | SqlCommand | n/a | 4 | 50 | 400 | 1.00/1/1 | 16,403 | 11,524 | 70.3 % | 99.55 ms | 6.11 ms | 11.64 ms |
+| Multiple INSERT statements | SqlBatch | 4/1/1 ms | 4 | 50 | 200 | 2.00/3/3 | 4,308 | 3,721 | 86.4 % | 363.09 ms | 26.96 ms | 26.96 ms |
+| Multi-row VALUES | SqlCommand | n/a | 4 | 100 | 200 | 1.00/1/1 | 21,722 | 15,503 | 71.4 % | 104.50 ms | 14.06 ms | 18.88 ms |
+| Multi-row VALUES | SqlBatch | 4/1/1 ms | 4 | 100 | 100 | 2.00/3/3 | 5,381 | 4,452 | 82.7 % | 452.75 ms | 54.49 ms | 54.49 ms |
 | SqlBulkCopy | SqlBulkCopy | n/a | 2 | 1,000 | n/a | n/a | 28,133 | 13,129 | 46.7 % | 108.85 ms | 47.00 ms | 53.24 ms |
 
 These direct controls use the row count recorded in each raw result, so the ratios estimate pipeline overhead rather than isolate it. A ratio above 100% reflects observed run-order and concurrency variance; it is not negative RabbitMQ overhead.
@@ -200,12 +319,16 @@ These direct controls use the row count recorded in each raw result, so the rati
 | Individual insert per message | SqlCommand | n/a | 1 | 1,757 | n/a | n/a | 18.89 ms | 100.0–100.0% | 1.0 |
 | Individual insert per message | SqlCommand | n/a | 2 | 3,004 | n/a | n/a | 20.90 ms | 49.3–50.7% | 1.0 |
 | Individual insert per message | SqlCommand | n/a | 4 | 2,565 | n/a | n/a | 269.36 ms | 24.8–25.2% | 1.0 |
+| Individual insert per message | SqlBatch | 4/1/1 ms | 2 | 205 | 500 | 4.00/4/4 | 277.25 ms | 50.0–50.0% | 1.0 |
+| Individual insert per message | SqlBatch | 4/1/1 ms | 4 | 425 | 529 | 3.78/4/4 | 227.51 ms | 15.0–35.0% | 1.0 |
 | Table-valued parameter | SqlCommand | n/a | 1 | 11,910 | n/a | n/a | 275.14 ms | 100.0–100.0% | 476.2 |
 | Table-valued parameter | SqlCommand | n/a | 2 | 1,864 | n/a | n/a | 3,079.30 ms | 44.2–55.8% | 435.6 |
 | Table-valued parameter | SqlCommand | n/a | 4 | 8,217 | n/a | n/a | 1,104.76 ms | 20.0–34.5% | 380.7 |
 | Multiple INSERT statements | SqlCommand | n/a | 1 | 748 | n/a | n/a | 785.65 ms | 100.0–100.0% | 50.0 |
-| Multiple INSERT statements | SqlCommand | n/a | 2 | 9,511 | n/a | n/a | 258.15 ms | 48.5–51.5% | 50.0 |
+| Multiple INSERT statements | SqlCommand | n/a | 2 | 12,845 | 400 | 1.00/1/1 | 378.29 ms | 49.0–51.0% | 50.0 |
 | Multiple INSERT statements | SqlCommand | n/a | 4 | 10,308 | n/a | n/a | 321.68 ms | 24.0–27.0% | 49.8 |
+| Multiple INSERT statements | SqlBatch | 4/1/1 ms | 2 | 5,958 | 191 | 2.09/3/4 | 657.63 ms | 50.0–50.0% | 50.0 |
+| Multiple INSERT statements | SqlBatch | 4/1/1 ms | 4 | 10,048 | 184 | 2.19/4/4 | 843.82 ms | 21.4–27.0% | 49.6 |
 | Multi-row VALUES | SqlCommand | n/a | 1 | 8,362 | n/a | n/a | 223.18 ms | 100.0–100.0% | 100.0 |
 | Multi-row VALUES | SqlCommand | n/a | 2 | 13,505 | n/a | n/a | 249.30 ms | 50.0–50.0% | 100.0 |
 | Multi-row VALUES | SqlCommand | n/a | 4 | 11,744 | n/a | n/a | 431.38 ms | 23.4–28.6% | 96.2 |
@@ -219,6 +342,14 @@ Frontiers compare only runs from the same binary, row count, and data distributi
 
 | Strategy | Binary | Rows | Distribution | SQL API | Scenario | Rows/s | p99 ack | Batch | Writers | Workers |
 |---|---|---:|---|---|---|---:|---:|---:|---:|---:|
+| Individual insert per message | `31f7dec` | 2,000 | Uniform | SqlCommand | sqlbatch-control-individual-native | 133 | 14.15 ms | 1 | 1 | 1 |
+| Individual insert per message | `31f7dec` | 2,000 | Uniform | SqlCommand | sqlbatch-writers-individual-native-2 | 493 | 14.30 ms | 1 | 2 | 1 |
+| Individual insert per message | `31f7dec` | 2,000 | Uniform | SqlCommand | sqlbatch-writers-individual-native-4 | 1,269 | 21.98 ms | 1 | 4 | 1 |
+| Individual insert per message | `31f7dec` | 2,000 | Uniform | SqlCommand | sqlbatch-instances-individual-native-2 | 1,513 | 541.46 ms | 1 | 4 | 2 |
+| Individual insert per message | `31f7dec` | 2,000 | ModerateSkew | SqlCommand | sqlbatch-distribution-individual-native-moderateskew | 1,223 | 16.53 ms | 1 | 4 | 1 |
+| Individual insert per message | `31f7dec` | 2,000 | HotParent | SqlBatch | sqlbatch-distribution-individual-sqlbatch-hotparent | 178 | 134.00 ms | 1 | 4 | 1 |
+| Individual insert per message | `31f7dec` | 2,000 | HotParent | SqlCommand | sqlbatch-distribution-individual-native-hotparent | 1,255 | 164.68 ms | 1 | 4 | 1 |
+| Individual insert per message | `31f7dec` | 50,000 | Uniform | SqlCommand | confirmed-sqlbatch-individual-native | 1,980 | 13.98 ms | 1 | 4 | 1 |
 | Individual insert per message | `c6d3469` | 750,000 | Uniform | SqlCommand | confirmed-individual | 2,053 | 161.78 ms | 1 | 4 | 2 |
 | Individual insert per message | `e0d9785` | 10,000 | Uniform | SqlCommand | broad-individual-uniform | 1,784 | 14.08 ms | 1 | 4 | 1 |
 | Individual insert per message | `e0d9785` | 10,000 | Uniform | SqlCommand | scaling-individual-workers-2 | 3,004 | 20.90 ms | 1 | 4 | 2 |
@@ -227,6 +358,14 @@ Frontiers compare only runs from the same binary, row count, and data distributi
 | Individual insert per message | `e0d9785` | 250,000 | Uniform | SqlCommand | finalist-individual | 1,001 | 163.13 ms | 1 | 4 | 1 |
 | Individual insert per message | `e0d9785` | 250,000 | Uniform | SqlCommand | finalist-individual | 1,057 | 163.68 ms | 1 | 4 | 1 |
 | Table-valued parameter | `2f0f925` | 750,000 | Uniform | SqlCommand | confirmed-table-valued-parameter | 27,790 | 290.85 ms | 5,000 | 2 | 1 |
+| Table-valued parameter | `31f7dec` | 20,000 | Uniform | SqlCommand | sqlbatch-control-tablevaluedparameter-native | 9,503 | 297.48 ms | 500 | 1 | 1 |
+| Table-valued parameter | `31f7dec` | 20,000 | Uniform | SqlBatch | sqlbatch-control-tablevaluedparameter-sqlbatch | 10,229 | 331.22 ms | 500 | 1 | 1 |
+| Table-valued parameter | `31f7dec` | 20,000 | Uniform | SqlCommand | sqlbatch-writers-tablevaluedparameter-native-2 | 12,810 | 419.82 ms | 500 | 2 | 1 |
+| Table-valued parameter | `31f7dec` | 20,000 | Uniform | SqlBatch | sqlbatch-lanes-tablevaluedparameter-w4-c1-r4 | 13,304 | 529.74 ms | 500 | 4 | 1 |
+| Table-valued parameter | `31f7dec` | 20,000 | ModerateSkew | SqlBatch | sqlbatch-distribution-tablevaluedparameter-sqlbatch-moderateskew | 12,868 | 579.22 ms | 500 | 4 | 1 |
+| Table-valued parameter | `31f7dec` | 20,000 | HotParent | SqlBatch | sqlbatch-distribution-tablevaluedparameter-sqlbatch-hotparent | 12,299 | 572.32 ms | 500 | 4 | 1 |
+| Table-valued parameter | `31f7dec` | 20,000 | HotParent | SqlCommand | sqlbatch-distribution-tablevaluedparameter-native-hotparent | 12,602 | 666.17 ms | 500 | 4 | 1 |
+| Table-valued parameter | `31f7dec` | 750,000 | Uniform | SqlBatch | confirmed-sqlbatch-tvp-sqlbatch | 14,646 | 502.43 ms | 500 | 4 | 1 |
 | Table-valued parameter | `c6d3469` | 750,000 | Uniform | SqlCommand | confirmed-table-valued-parameter | 23,957 | 396.10 ms | 5,000 | 2 | 1 |
 | Table-valued parameter | `c6d3469` | 750,000 | Uniform | SqlCommand | confirmed-table-valued-parameter | 29,082 | 417.83 ms | 5,000 | 2 | 1 |
 | Table-valued parameter | `e0d9785` | 10,000 | Uniform | SqlCommand | refine-tablevaluedparameter-batch-10 | 1,128 | 126.54 ms | 10 | 2 | 1 |
@@ -236,6 +375,14 @@ Frontiers compare only runs from the same binary, row count, and data distributi
 | Table-valued parameter | `e0d9785` | 10,000 | ModerateSkew | SqlCommand | broad-tablevaluedparameter-moderateskew | 10,558 | 307.25 ms | 500 | 2 | 1 |
 | Table-valued parameter | `e0d9785` | 10,000 | HotParent | SqlCommand | broad-tablevaluedparameter-hotparent | 12,181 | 349.56 ms | 500 | 2 | 1 |
 | Table-valued parameter | `e0d9785` | 250,000 | Uniform | SqlCommand | finalist-tablevaluedparameter | 11,109 | 315.65 ms | 500 | 2 | 1 |
+| Multiple INSERT statements | `31f7dec` | 20,000 | Uniform | SqlBatch | sqlbatch-control-multipleinsertstatements-sqlbatch | 3,521 | 211.92 ms | 50 | 1 | 1 |
+| Multiple INSERT statements | `31f7dec` | 20,000 | Uniform | SqlCommand | sqlbatch-writers-multipleinsertstatements-native-2 | 7,141 | 259.38 ms | 50 | 2 | 1 |
+| Multiple INSERT statements | `31f7dec` | 20,000 | Uniform | SqlBatch | sqlbatch-lanes-multipleinsertstatements-w4-c1-r4 | 11,513 | 354.67 ms | 50 | 4 | 1 |
+| Multiple INSERT statements | `31f7dec` | 20,000 | Uniform | SqlCommand | sqlbatch-writers-multipleinsertstatements-native-8 | 12,851 | 356.58 ms | 50 | 8 | 1 |
+| Multiple INSERT statements | `31f7dec` | 20,000 | Uniform | SqlBatch | sqlbatch-lanes-multipleinsertstatements-w8-c1-r8 | 12,955 | 366.24 ms | 50 | 8 | 1 |
+| Multiple INSERT statements | `31f7dec` | 20,000 | ModerateSkew | SqlBatch | sqlbatch-distribution-multipleinsertstatements-sqlbatch-moderateskew | 4,063 | 602.10 ms | 50 | 4 | 1 |
+| Multiple INSERT statements | `31f7dec` | 20,000 | HotParent | SqlCommand | sqlbatch-distribution-multipleinsertstatements-native-hotparent | 11,301 | 314.08 ms | 50 | 4 | 1 |
+| Multiple INSERT statements | `31f7dec` | 500,000 | Uniform | SqlCommand | confirmed-sqlbatch-multiple-statements-native | 13,521 | 174.43 ms | 50 | 4 | 1 |
 | Multiple INSERT statements | `c6d3469` | 750,000 | Uniform | SqlCommand | confirmed-multiple-statements | 15,132 | 158.06 ms | 50 | 2 | 4 |
 | Multiple INSERT statements | `e0d9785` | 10,000 | Uniform | SqlCommand | refine-multipleinsertstatements-batch-10 | 2,279 | 101.37 ms | 10 | 2 | 1 |
 | Multiple INSERT statements | `e0d9785` | 10,000 | Uniform | SqlCommand | broad-multipleinsertstatements-uniform | 5,128 | 210.15 ms | 50 | 2 | 1 |
@@ -244,6 +391,13 @@ Frontiers compare only runs from the same binary, row count, and data distributi
 | Multiple INSERT statements | `e0d9785` | 10,000 | ModerateSkew | SqlCommand | broad-multipleinsertstatements-moderateskew | 6,353 | 259.46 ms | 50 | 2 | 1 |
 | Multiple INSERT statements | `e0d9785` | 10,000 | HotParent | SqlCommand | broad-multipleinsertstatements-hotparent | 4,478 | 213.32 ms | 50 | 2 | 1 |
 | Multiple INSERT statements | `e0d9785` | 250,000 | Uniform | SqlCommand | finalist-multipleinsertstatements | 7,810 | 90.77 ms | 50 | 2 | 1 |
+| Multi-row VALUES | `31f7dec` | 20,000 | Uniform | SqlBatch | sqlbatch-control-multirowvalues-sqlbatch | 4,610 | 293.73 ms | 100 | 1 | 1 |
+| Multi-row VALUES | `31f7dec` | 20,000 | Uniform | SqlBatch | sqlbatch-lanes-multirowvalues-w4-c1-r4 | 15,114 | 346.73 ms | 100 | 4 | 1 |
+| Multi-row VALUES | `31f7dec` | 20,000 | Uniform | SqlCommand | sqlbatch-writers-multirowvalues-native-4 | 15,503 | 365.08 ms | 100 | 4 | 1 |
+| Multi-row VALUES | `31f7dec` | 20,000 | Uniform | SqlCommand | sqlbatch-writers-multirowvalues-native-8 | 16,339 | 509.40 ms | 100 | 8 | 1 |
+| Multi-row VALUES | `31f7dec` | 20,000 | ModerateSkew | SqlCommand | sqlbatch-distribution-multirowvalues-native-moderateskew | 2,851 | 1,248.32 ms | 100 | 4 | 1 |
+| Multi-row VALUES | `31f7dec` | 20,000 | HotParent | SqlCommand | sqlbatch-distribution-multirowvalues-native-hotparent | 14,134 | 390.22 ms | 100 | 4 | 1 |
+| Multi-row VALUES | `31f7dec` | 500,000 | Uniform | SqlBatch | confirmed-sqlbatch-multi-row-values-sqlbatch | 19,748 | 177.81 ms | 100 | 4 | 1 |
 | Multi-row VALUES | `c6d3469` | 750,000 | Uniform | SqlCommand | confirmed-multi-row-values | 8,809 | 1,004.58 ms | 100 | 2 | 2 |
 | Multi-row VALUES | `c6d3469` | 750,000 | Uniform | SqlCommand | confirmed-multi-row-values | 8,964 | 1,610.26 ms | 100 | 2 | 2 |
 | Multi-row VALUES | `e0d9785` | 10,000 | Uniform | SqlCommand | refine-multirowvalues-batch-10 | 2,212 | 92.79 ms | 10 | 2 | 1 |
@@ -298,6 +452,30 @@ Every published run passed row-count, distinct-ID, missing-ID, foreign-key, queu
 - [confirmed-multiple-statements, repetition 1](results/published/20260904-confirmation-c6d3469/confirmed-multiple-statements-r1.json)
 - [confirmed-multiple-statements, repetition 2](results/published/20260904-confirmation-c6d3469/confirmed-multiple-statements-r2.json)
 - [confirmed-multiple-statements, repetition 3](results/published/20260904-confirmation-c6d3469/confirmed-multiple-statements-r3.json)
+- [confirmed-sqlbatch-individual-native, repetition 1](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-individual-native-r1.json)
+- [confirmed-sqlbatch-individual-native, repetition 2](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-individual-native-r2.json)
+- [confirmed-sqlbatch-individual-native, repetition 3](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-individual-native-r3.json)
+- [confirmed-sqlbatch-individual-sqlbatch, repetition 1](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-individual-sqlbatch-r1.json)
+- [confirmed-sqlbatch-individual-sqlbatch, repetition 2](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-individual-sqlbatch-r2.json)
+- [confirmed-sqlbatch-individual-sqlbatch, repetition 3](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-individual-sqlbatch-r3.json)
+- [confirmed-sqlbatch-multi-row-values-native, repetition 1](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-multi-row-values-native-r1.json)
+- [confirmed-sqlbatch-multi-row-values-native, repetition 2](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-multi-row-values-native-r2.json)
+- [confirmed-sqlbatch-multi-row-values-native, repetition 3](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-multi-row-values-native-r3.json)
+- [confirmed-sqlbatch-multi-row-values-sqlbatch, repetition 1](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-multi-row-values-sqlbatch-r1.json)
+- [confirmed-sqlbatch-multi-row-values-sqlbatch, repetition 2](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-multi-row-values-sqlbatch-r2.json)
+- [confirmed-sqlbatch-multi-row-values-sqlbatch, repetition 3](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-multi-row-values-sqlbatch-r3.json)
+- [confirmed-sqlbatch-multiple-statements-native, repetition 1](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-multiple-statements-native-r1.json)
+- [confirmed-sqlbatch-multiple-statements-native, repetition 2](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-multiple-statements-native-r2.json)
+- [confirmed-sqlbatch-multiple-statements-native, repetition 3](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-multiple-statements-native-r3.json)
+- [confirmed-sqlbatch-multiple-statements-sqlbatch, repetition 1](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-multiple-statements-sqlbatch-r1.json)
+- [confirmed-sqlbatch-multiple-statements-sqlbatch, repetition 2](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-multiple-statements-sqlbatch-r2.json)
+- [confirmed-sqlbatch-multiple-statements-sqlbatch, repetition 3](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-multiple-statements-sqlbatch-r3.json)
+- [confirmed-sqlbatch-tvp-native, repetition 1](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-tvp-native-r1.json)
+- [confirmed-sqlbatch-tvp-native, repetition 2](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-tvp-native-r2.json)
+- [confirmed-sqlbatch-tvp-native, repetition 3](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-tvp-native-r3.json)
+- [confirmed-sqlbatch-tvp-sqlbatch, repetition 1](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-tvp-sqlbatch-r1.json)
+- [confirmed-sqlbatch-tvp-sqlbatch, repetition 2](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-tvp-sqlbatch-r2.json)
+- [confirmed-sqlbatch-tvp-sqlbatch, repetition 3](results/published/20260904-sqlbatch-confirmation-31f7dec/confirmed-sqlbatch-tvp-sqlbatch-r3.json)
 - [confirmed-table-valued-parameter, repetition 1](results/published/20260904-confirmation-c6d3469/confirmed-table-valued-parameter-r1.json)
 - [confirmed-table-valued-parameter, repetition 2](results/published/20260904-confirmation-c6d3469/confirmed-table-valued-parameter-r2.json)
 - [confirmed-table-valued-parameter, repetition 3](results/published/20260904-confirmation-c6d3469/confirmed-table-valued-parameter-r3.json)
@@ -380,6 +558,112 @@ Every published run passed row-count, distinct-ID, missing-ID, foreign-key, queu
 - [scaling-tablevaluedparameter-workers-1, repetition 1](results/published/20260904-full-e0d9785/scaling-tablevaluedparameter-workers-1-r1.json)
 - [scaling-tablevaluedparameter-workers-2, repetition 1](results/published/20260904-full-e0d9785/scaling-tablevaluedparameter-workers-2-r1.json)
 - [scaling-tablevaluedparameter-workers-4, repetition 1](results/published/20260904-full-e0d9785/scaling-tablevaluedparameter-workers-4-r1.json)
+- [sqlbatch-command-cap-individual-1, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-command-cap-individual-1-r1.json)
+- [sqlbatch-command-cap-individual-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-command-cap-individual-2-r1.json)
+- [sqlbatch-command-cap-individual-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-command-cap-individual-4-r1.json)
+- [sqlbatch-command-cap-multipleinsertstatements-1, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-command-cap-multipleinsertstatements-1-r1.json)
+- [sqlbatch-command-cap-multipleinsertstatements-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-command-cap-multipleinsertstatements-2-r1.json)
+- [sqlbatch-command-cap-multipleinsertstatements-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-command-cap-multipleinsertstatements-4-r1.json)
+- [sqlbatch-command-cap-multirowvalues-1, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-command-cap-multirowvalues-1-r1.json)
+- [sqlbatch-command-cap-multirowvalues-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-command-cap-multirowvalues-2-r1.json)
+- [sqlbatch-command-cap-multirowvalues-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-command-cap-multirowvalues-4-r1.json)
+- [sqlbatch-command-cap-tablevaluedparameter-1, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-command-cap-tablevaluedparameter-1-r1.json)
+- [sqlbatch-command-cap-tablevaluedparameter-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-command-cap-tablevaluedparameter-2-r1.json)
+- [sqlbatch-command-cap-tablevaluedparameter-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-command-cap-tablevaluedparameter-4-r1.json)
+- [sqlbatch-control-individual-native, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-control-individual-native-r1.json)
+- [sqlbatch-control-individual-sqlbatch, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-control-individual-sqlbatch-r1.json)
+- [sqlbatch-control-multipleinsertstatements-native, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-control-multipleinsertstatements-native-r1.json)
+- [sqlbatch-control-multipleinsertstatements-sqlbatch, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-control-multipleinsertstatements-sqlbatch-r1.json)
+- [sqlbatch-control-multirowvalues-native, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-control-multirowvalues-native-r1.json)
+- [sqlbatch-control-multirowvalues-sqlbatch, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-control-multirowvalues-sqlbatch-r1.json)
+- [sqlbatch-control-noop-individual, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-control-noop-individual-r1.json)
+- [sqlbatch-control-noop-multi-row-values, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-control-noop-multi-row-values-r1.json)
+- [sqlbatch-control-noop-multi-row-values-w4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-control-noop-multi-row-values-w4-r1.json)
+- [sqlbatch-control-noop-multiple-statements, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-control-noop-multiple-statements-r1.json)
+- [sqlbatch-control-noop-multiple-statements-w4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-control-noop-multiple-statements-w4-r1.json)
+- [sqlbatch-control-noop-tvp, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-control-noop-tvp-r1.json)
+- [sqlbatch-control-tablevaluedparameter-native, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-control-tablevaluedparameter-native-r1.json)
+- [sqlbatch-control-tablevaluedparameter-sqlbatch, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-control-tablevaluedparameter-sqlbatch-r1.json)
+- [sqlbatch-delay-individual-20, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-delay-individual-20-r1.json)
+- [sqlbatch-delay-individual-5, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-delay-individual-5-r1.json)
+- [sqlbatch-delay-multipleinsertstatements-20, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-delay-multipleinsertstatements-20-r1.json)
+- [sqlbatch-delay-multipleinsertstatements-5, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-delay-multipleinsertstatements-5-r1.json)
+- [sqlbatch-direct-individual-native, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-direct-individual-native-r1.json)
+- [sqlbatch-direct-individual-sqlbatch, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-direct-individual-sqlbatch-r1.json)
+- [sqlbatch-direct-multipleinsertstatements-native, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-direct-multipleinsertstatements-native-r1.json)
+- [sqlbatch-direct-multipleinsertstatements-sqlbatch, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-direct-multipleinsertstatements-sqlbatch-r1.json)
+- [sqlbatch-direct-multirowvalues-native, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-direct-multirowvalues-native-r1.json)
+- [sqlbatch-direct-multirowvalues-sqlbatch, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-direct-multirowvalues-sqlbatch-r1.json)
+- [sqlbatch-direct-tablevaluedparameter-native, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-direct-tablevaluedparameter-native-r1.json)
+- [sqlbatch-direct-tablevaluedparameter-sqlbatch, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-direct-tablevaluedparameter-sqlbatch-r1.json)
+- [sqlbatch-distribution-individual-native-hotparent, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-individual-native-hotparent-r1.json)
+- [sqlbatch-distribution-individual-native-moderateskew, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-individual-native-moderateskew-r1.json)
+- [sqlbatch-distribution-individual-sqlbatch-hotparent, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-individual-sqlbatch-hotparent-r1.json)
+- [sqlbatch-distribution-individual-sqlbatch-moderateskew, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-individual-sqlbatch-moderateskew-r1.json)
+- [sqlbatch-distribution-multipleinsertstatements-native-hotparent, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-multipleinsertstatements-native-hotparent-r1.json)
+- [sqlbatch-distribution-multipleinsertstatements-native-moderateskew, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-multipleinsertstatements-native-moderateskew-r1.json)
+- [sqlbatch-distribution-multipleinsertstatements-sqlbatch-hotparent, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-multipleinsertstatements-sqlbatch-hotparent-r1.json)
+- [sqlbatch-distribution-multipleinsertstatements-sqlbatch-moderateskew, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-multipleinsertstatements-sqlbatch-moderateskew-r1.json)
+- [sqlbatch-distribution-multirowvalues-native-hotparent, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-multirowvalues-native-hotparent-r1.json)
+- [sqlbatch-distribution-multirowvalues-native-moderateskew, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-multirowvalues-native-moderateskew-r1.json)
+- [sqlbatch-distribution-multirowvalues-sqlbatch-hotparent, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-multirowvalues-sqlbatch-hotparent-r1.json)
+- [sqlbatch-distribution-multirowvalues-sqlbatch-moderateskew, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-multirowvalues-sqlbatch-moderateskew-r1.json)
+- [sqlbatch-distribution-tablevaluedparameter-native-hotparent, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-tablevaluedparameter-native-hotparent-r1.json)
+- [sqlbatch-distribution-tablevaluedparameter-native-moderateskew, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-tablevaluedparameter-native-moderateskew-r1.json)
+- [sqlbatch-distribution-tablevaluedparameter-sqlbatch-hotparent, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-tablevaluedparameter-sqlbatch-hotparent-r1.json)
+- [sqlbatch-distribution-tablevaluedparameter-sqlbatch-moderateskew, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-distribution-tablevaluedparameter-sqlbatch-moderateskew-r1.json)
+- [sqlbatch-instances-individual-native-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-instances-individual-native-2-r1.json)
+- [sqlbatch-instances-individual-native-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-instances-individual-native-4-r1.json)
+- [sqlbatch-instances-individual-sqlbatch-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-instances-individual-sqlbatch-2-r1.json)
+- [sqlbatch-instances-individual-sqlbatch-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-instances-individual-sqlbatch-4-r1.json)
+- [sqlbatch-instances-multipleinsertstatements-native-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-instances-multipleinsertstatements-native-2-r1.json)
+- [sqlbatch-instances-multipleinsertstatements-native-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-instances-multipleinsertstatements-native-4-r1.json)
+- [sqlbatch-instances-multipleinsertstatements-sqlbatch-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-instances-multipleinsertstatements-sqlbatch-2-r1.json)
+- [sqlbatch-instances-multipleinsertstatements-sqlbatch-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-instances-multipleinsertstatements-sqlbatch-4-r1.json)
+- [sqlbatch-lanes-individual-w4-c1-r4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-individual-w4-c1-r4-r1.json)
+- [sqlbatch-lanes-individual-w4-c2-r2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-individual-w4-c2-r2-r1.json)
+- [sqlbatch-lanes-individual-w8-c1-r8, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-individual-w8-c1-r8-r1.json)
+- [sqlbatch-lanes-individual-w8-c2-r4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-individual-w8-c2-r4-r1.json)
+- [sqlbatch-lanes-individual-w8-c4-r2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-individual-w8-c4-r2-r1.json)
+- [sqlbatch-lanes-multipleinsertstatements-w4-c1-r4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-multipleinsertstatements-w4-c1-r4-r1.json)
+- [sqlbatch-lanes-multipleinsertstatements-w4-c2-r2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-multipleinsertstatements-w4-c2-r2-r1.json)
+- [sqlbatch-lanes-multipleinsertstatements-w8-c1-r8, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-multipleinsertstatements-w8-c1-r8-r1.json)
+- [sqlbatch-lanes-multipleinsertstatements-w8-c2-r4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-multipleinsertstatements-w8-c2-r4-r1.json)
+- [sqlbatch-lanes-multipleinsertstatements-w8-c4-r2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-multipleinsertstatements-w8-c4-r2-r1.json)
+- [sqlbatch-lanes-multirowvalues-w4-c1-r4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-multirowvalues-w4-c1-r4-r1.json)
+- [sqlbatch-lanes-multirowvalues-w4-c2-r2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-multirowvalues-w4-c2-r2-r1.json)
+- [sqlbatch-lanes-multirowvalues-w8-c1-r8, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-multirowvalues-w8-c1-r8-r1.json)
+- [sqlbatch-lanes-multirowvalues-w8-c2-r4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-multirowvalues-w8-c2-r4-r1.json)
+- [sqlbatch-lanes-multirowvalues-w8-c4-r2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-multirowvalues-w8-c4-r2-r1.json)
+- [sqlbatch-lanes-tablevaluedparameter-w4-c1-r4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-tablevaluedparameter-w4-c1-r4-r1.json)
+- [sqlbatch-lanes-tablevaluedparameter-w4-c2-r2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-tablevaluedparameter-w4-c2-r2-r1.json)
+- [sqlbatch-lanes-tablevaluedparameter-w8-c1-r8, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-tablevaluedparameter-w8-c1-r8-r1.json)
+- [sqlbatch-lanes-tablevaluedparameter-w8-c2-r4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-tablevaluedparameter-w8-c2-r4-r1.json)
+- [sqlbatch-lanes-tablevaluedparameter-w8-c4-r2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-lanes-tablevaluedparameter-w8-c4-r2-r1.json)
+- [sqlbatch-writers-individual-native-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-individual-native-2-r1.json)
+- [sqlbatch-writers-individual-native-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-individual-native-4-r1.json)
+- [sqlbatch-writers-individual-native-8, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-individual-native-8-r1.json)
+- [sqlbatch-writers-individual-sqlbatch-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-individual-sqlbatch-2-r1.json)
+- [sqlbatch-writers-individual-sqlbatch-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-individual-sqlbatch-4-r1.json)
+- [sqlbatch-writers-individual-sqlbatch-8, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-individual-sqlbatch-8-r1.json)
+- [sqlbatch-writers-multipleinsertstatements-native-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-multipleinsertstatements-native-2-r1.json)
+- [sqlbatch-writers-multipleinsertstatements-native-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-multipleinsertstatements-native-4-r1.json)
+- [sqlbatch-writers-multipleinsertstatements-native-8, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-multipleinsertstatements-native-8-r1.json)
+- [sqlbatch-writers-multipleinsertstatements-sqlbatch-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-multipleinsertstatements-sqlbatch-2-r1.json)
+- [sqlbatch-writers-multipleinsertstatements-sqlbatch-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-multipleinsertstatements-sqlbatch-4-r1.json)
+- [sqlbatch-writers-multipleinsertstatements-sqlbatch-8, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-multipleinsertstatements-sqlbatch-8-r1.json)
+- [sqlbatch-writers-multirowvalues-native-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-multirowvalues-native-2-r1.json)
+- [sqlbatch-writers-multirowvalues-native-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-multirowvalues-native-4-r1.json)
+- [sqlbatch-writers-multirowvalues-native-8, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-multirowvalues-native-8-r1.json)
+- [sqlbatch-writers-multirowvalues-sqlbatch-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-multirowvalues-sqlbatch-2-r1.json)
+- [sqlbatch-writers-multirowvalues-sqlbatch-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-multirowvalues-sqlbatch-4-r1.json)
+- [sqlbatch-writers-multirowvalues-sqlbatch-8, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-multirowvalues-sqlbatch-8-r1.json)
+- [sqlbatch-writers-tablevaluedparameter-native-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-tablevaluedparameter-native-2-r1.json)
+- [sqlbatch-writers-tablevaluedparameter-native-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-tablevaluedparameter-native-4-r1.json)
+- [sqlbatch-writers-tablevaluedparameter-native-8, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-tablevaluedparameter-native-8-r1.json)
+- [sqlbatch-writers-tablevaluedparameter-sqlbatch-2, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-tablevaluedparameter-sqlbatch-2-r1.json)
+- [sqlbatch-writers-tablevaluedparameter-sqlbatch-4, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-tablevaluedparameter-sqlbatch-4-r1.json)
+- [sqlbatch-writers-tablevaluedparameter-sqlbatch-8, repetition 1](results/published/20260904-sqlbatch-31f7dec/sqlbatch-writers-tablevaluedparameter-sqlbatch-8-r1.json)
 <!-- RESULTS:END -->
 
 ## Recorded environment

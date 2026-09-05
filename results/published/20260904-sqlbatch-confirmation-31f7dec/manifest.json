@@ -1,0 +1,31 @@
+{
+  "profile": "SqlBatchConfirmation",
+  "gitCommit": "31f7deca527cbd5e03b2c74ee16bdab835f1ea42",
+  "generatedAt": "2026-09-05T00:43:31.1066896+00:00",
+  "files": [
+    "confirmed-sqlbatch-multi-row-values-sqlbatch-r1.json",
+    "confirmed-sqlbatch-multiple-statements-native-r1.json",
+    "confirmed-sqlbatch-individual-native-r3.json",
+    "confirmed-sqlbatch-individual-sqlbatch-r3.json",
+    "confirmed-sqlbatch-tvp-sqlbatch-r3.json",
+    "confirmed-sqlbatch-multiple-statements-sqlbatch-r1.json",
+    "confirmed-sqlbatch-individual-native-r1.json",
+    "confirmed-sqlbatch-tvp-sqlbatch-r1.json",
+    "confirmed-sqlbatch-individual-native-r2.json",
+    "confirmed-sqlbatch-multiple-statements-sqlbatch-r2.json",
+    "confirmed-sqlbatch-multiple-statements-sqlbatch-r3.json",
+    "confirmed-sqlbatch-multi-row-values-native-r1.json",
+    "confirmed-sqlbatch-individual-sqlbatch-r2.json",
+    "confirmed-sqlbatch-multiple-statements-native-r2.json",
+    "confirmed-sqlbatch-tvp-native-r1.json",
+    "confirmed-sqlbatch-multiple-statements-native-r3.json",
+    "confirmed-sqlbatch-multi-row-values-native-r2.json",
+    "confirmed-sqlbatch-multi-row-values-native-r3.json",
+    "confirmed-sqlbatch-multi-row-values-sqlbatch-r2.json",
+    "confirmed-sqlbatch-individual-sqlbatch-r1.json",
+    "confirmed-sqlbatch-tvp-native-r3.json",
+    "confirmed-sqlbatch-tvp-native-r2.json",
+    "confirmed-sqlbatch-multi-row-values-sqlbatch-r3.json",
+    "confirmed-sqlbatch-tvp-sqlbatch-r2.json"
+  ]
+}

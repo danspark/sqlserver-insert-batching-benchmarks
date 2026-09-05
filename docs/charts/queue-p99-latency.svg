@@ -1,19 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1050" height="400" viewBox="0 0 1050 400" role="img" aria-label="p99 delivery-to-acknowledgment latency">
+<svg xmlns="http://www.w3.org/2000/svg" width="1050" height="648" viewBox="0 0 1050 648" role="img" aria-label="p99 delivery-to-acknowledgment latency">
 <style>text{font-family:ui-sans-serif,system-ui,sans-serif;fill:#17202a}.title{font-size:22px;font-weight:700}.label{font-size:14px}.value{font-size:14px;font-weight:650}.bar{fill:#2878b5}</style>
-<rect width="1050" height="400" fill="#fff"/><text class="title" x="20" y="34">p99 delivery-to-acknowledgment latency</text>
+<rect width="1050" height="648" fill="#fff"/><text class="title" x="20" y="34">p99 delivery-to-acknowledgment latency</text>
 <text class="label" x="20" y="89">Individual insert per message (SqlCommand)</text>
-<rect class="bar" x="330" y="62" width="29.5" height="42" rx="4"/>
-<text class="value" x="367.5" y="89">20.9 milliseconds</text>
-<text class="label" x="20" y="151">Table-valued parameter (SqlCommand)</text>
-<rect class="bar" x="330" y="124" width="590.0" height="42" rx="4"/>
-<text class="value" x="928.0" y="151">417.8 milliseconds</text>
-<text class="label" x="20" y="213">Multiple INSERT statements (SqlCommand)</text>
-<rect class="bar" x="330" y="186" width="223.2" height="42" rx="4"/>
-<text class="value" x="561.2" y="213">158.1 milliseconds</text>
-<text class="label" x="20" y="275">Multi-row VALUES (SqlCommand)</text>
-<rect class="bar" x="330" y="248" width="352.0" height="42" rx="4"/>
-<text class="value" x="690.0" y="275">249.3 milliseconds</text>
-<text class="label" x="20" y="337">SqlBulkCopy (SqlBulkCopy)</text>
-<rect class="bar" x="330" y="310" width="583.1" height="42" rx="4"/>
-<text class="value" x="921.1" y="337">413.0 milliseconds</text>
+<rect class="bar" x="330" y="62" width="24.2" height="42" rx="4"/>
+<text class="value" x="362.2" y="89">20.9 milliseconds</text>
+<text class="label" x="20" y="151">Individual insert per message (SqlBatch)</text>
+<rect class="bar" x="330" y="124" width="355.5" height="42" rx="4"/>
+<text class="value" x="693.5" y="151">307.0 milliseconds</text>
+<text class="label" x="20" y="213">Table-valued parameter (SqlCommand)</text>
+<rect class="bar" x="330" y="186" width="483.9" height="42" rx="4"/>
+<text class="value" x="821.9" y="213">417.8 milliseconds</text>
+<text class="label" x="20" y="275">Table-valued parameter (SqlBatch)</text>
+<rect class="bar" x="330" y="248" width="581.9" height="42" rx="4"/>
+<text class="value" x="919.9" y="275">502.4 milliseconds</text>
+<text class="label" x="20" y="337">Multiple INSERT statements (SqlCommand)</text>
+<rect class="bar" x="330" y="310" width="183.1" height="42" rx="4"/>
+<text class="value" x="521.1" y="337">158.1 milliseconds</text>
+<text class="label" x="20" y="399">Multiple INSERT statements (SqlBatch)</text>
+<rect class="bar" x="330" y="372" width="278.4" height="42" rx="4"/>
+<text class="value" x="616.4" y="399">240.3 milliseconds</text>
+<text class="label" x="20" y="461">Multi-row VALUES (SqlCommand)</text>
+<rect class="bar" x="330" y="434" width="590.0" height="42" rx="4"/>
+<text class="value" x="928.0" y="461">509.4 milliseconds</text>
+<text class="label" x="20" y="523">Multi-row VALUES (SqlBatch)</text>
+<rect class="bar" x="330" y="496" width="205.9" height="42" rx="4"/>
+<text class="value" x="543.9" y="523">177.8 milliseconds</text>
+<text class="label" x="20" y="585">SqlBulkCopy (SqlBulkCopy)</text>
+<rect class="bar" x="330" y="558" width="478.3" height="42" rx="4"/>
+<text class="value" x="816.3" y="585">413.0 milliseconds</text>
 </svg>

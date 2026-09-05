@@ -1,19 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1050" height="400" viewBox="0 0 1050 400" role="img" aria-label="Best observed queue throughput">
+<svg xmlns="http://www.w3.org/2000/svg" width="1050" height="648" viewBox="0 0 1050 648" role="img" aria-label="Best observed queue throughput">
 <style>text{font-family:ui-sans-serif,system-ui,sans-serif;fill:#17202a}.title{font-size:22px;font-weight:700}.label{font-size:14px}.value{font-size:14px;font-weight:650}.bar{fill:#2878b5}</style>
-<rect width="1050" height="400" fill="#fff"/><text class="title" x="20" y="34">Best observed queue throughput</text>
+<rect width="1050" height="648" fill="#fff"/><text class="title" x="20" y="34">Best observed queue throughput</text>
 <text class="label" x="20" y="89">Individual insert per message (SqlCommand)</text>
 <rect class="bar" x="330" y="62" width="60.9" height="42" rx="4"/>
 <text class="value" x="398.9" y="89">3,004.1 committed rows/s</text>
-<text class="label" x="20" y="151">Table-valued parameter (SqlCommand)</text>
-<rect class="bar" x="330" y="124" width="590.0" height="42" rx="4"/>
-<text class="value" x="928.0" y="151">29,082.4 committed rows/s</text>
-<text class="label" x="20" y="213">Multiple INSERT statements (SqlCommand)</text>
-<rect class="bar" x="330" y="186" width="307.0" height="42" rx="4"/>
-<text class="value" x="645.0" y="213">15,132.1 committed rows/s</text>
-<text class="label" x="20" y="275">Multi-row VALUES (SqlCommand)</text>
-<rect class="bar" x="330" y="248" width="274.0" height="42" rx="4"/>
-<text class="value" x="612.0" y="275">13,505.1 committed rows/s</text>
-<text class="label" x="20" y="337">SqlBulkCopy (SqlBulkCopy)</text>
-<rect class="bar" x="330" y="310" width="467.6" height="42" rx="4"/>
-<text class="value" x="805.6" y="337">23,050.5 committed rows/s</text>
+<text class="label" x="20" y="151">Individual insert per message (SqlBatch)</text>
+<rect class="bar" x="330" y="124" width="16.9" height="42" rx="4"/>
+<text class="value" x="354.9" y="151">834.4 committed rows/s</text>
+<text class="label" x="20" y="213">Table-valued parameter (SqlCommand)</text>
+<rect class="bar" x="330" y="186" width="590.0" height="42" rx="4"/>
+<text class="value" x="928.0" y="213">29,082.4 committed rows/s</text>
+<text class="label" x="20" y="275">Table-valued parameter (SqlBatch)</text>
+<rect class="bar" x="330" y="248" width="297.1" height="42" rx="4"/>
+<text class="value" x="635.1" y="275">14,646.1 committed rows/s</text>
+<text class="label" x="20" y="337">Multiple INSERT statements (SqlCommand)</text>
+<rect class="bar" x="330" y="310" width="307.0" height="42" rx="4"/>
+<text class="value" x="645.0" y="337">15,132.1 committed rows/s</text>
+<text class="label" x="20" y="399">Multiple INSERT statements (SqlBatch)</text>
+<rect class="bar" x="330" y="372" width="270.4" height="42" rx="4"/>
+<text class="value" x="608.4" y="399">13,328.1 committed rows/s</text>
+<text class="label" x="20" y="461">Multi-row VALUES (SqlCommand)</text>
+<rect class="bar" x="330" y="434" width="331.5" height="42" rx="4"/>
+<text class="value" x="669.5" y="461">16,339.2 committed rows/s</text>
+<text class="label" x="20" y="523">Multi-row VALUES (SqlBatch)</text>
+<rect class="bar" x="330" y="496" width="400.6" height="42" rx="4"/>
+<text class="value" x="738.6" y="523">19,747.7 committed rows/s</text>
+<text class="label" x="20" y="585">SqlBulkCopy (SqlBulkCopy)</text>
+<rect class="bar" x="330" y="558" width="467.6" height="42" rx="4"/>
+<text class="value" x="805.6" y="585">23,050.5 committed rows/s</text>
 </svg>
