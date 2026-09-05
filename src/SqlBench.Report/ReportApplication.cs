@@ -486,6 +486,7 @@ internal static class ReportApplication
                 .Where(candidate => candidate.Configuration.Mode == WorkloadMode.Queue
                     && candidate.Configuration.SqlExecution == SqlExecutionKind.Native
                     && candidate.GitCommit == sqlBatch.GitCommit
+                    && candidate.Configuration.Repetition == sqlBatch.Configuration.Repetition
                     && ComparableAcrossSqlApis(candidate.Configuration, sqlBatch.Configuration))
                 .MinBy(candidate => Math.Abs((candidate.Timestamp - sqlBatch.Timestamp).Ticks));
             if (native is not null)
@@ -504,8 +505,8 @@ internal static class ReportApplication
         text.AppendLine();
         text.AppendLine("Each pair uses the same measured binary, rows, seed, distribution, worker topology, process batcher, logical batch size, capacity, and prefetch. Each SqlBatch request lane has one outstanding execution and its commands execute serially on that connection. Counts are DML execute API invocations. Native transaction begin and commit operations are outside this counter, so it is not a total network or TDS round-trip count. A SqlBatch execute is sent as one TDS request containing one RPC record per command.");
         text.AppendLine();
-        text.AppendLine("| Stage | Strategy | Distribution | Workers x writers | Logical batch | SqlBatch cap/lanes/delay | Actual commands/execute mean/p95/max | Native rows/s | SqlBatch rows/s | Rate change | Native DML executes | SqlBatch DML executes | Execute reduction | SqlBatch p99 ack |");
-        text.AppendLine("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+        text.AppendLine("| Stage | Repetition | Strategy | Distribution | Workers x writers | Logical batch | SqlBatch cap/lanes/delay | Actual commands/execute mean/p95/max | Native rows/s | SqlBatch rows/s | Rate change | Native DML executes | SqlBatch DML executes | Execute reduction | SqlBatch p99 ack |");
+        text.AppendLine("|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
         foreach ((ScenarioResult native, ScenarioResult sqlBatch) in pairs
             .OrderBy(static pair => StageRank(pair.SqlBatch.Configuration.Stage))
             .ThenBy(static pair => pair.SqlBatch.Configuration.Strategy)
@@ -526,7 +527,7 @@ internal static class ReportApplication
                 : 1 - (batchRequests.RequestCount / (double)nativeRequests.RequestCount);
             Scenario config = sqlBatch.Configuration;
             text.AppendLine(
-                $"| {config.Stage} | {StrategyName(config.Strategy)} | {config.Distribution} | " +
+                $"| {config.Stage} | {config.Repetition} | {StrategyName(config.Strategy)} | {config.Distribution} | " +
                 $"{config.WorkerInstances} x {config.WritersPerInstance} | {config.BatchSize:N0} | " +
                 $"{config.SqlBatchMaximumCommands}/{config.SqlBatchRequestConcurrency}/{config.SqlBatchMaximumDelayMilliseconds} ms | " +
                 $"{CommandDistribution(batchRequests)} | {native.CommittedRowsPerSecond:N0} | " +
